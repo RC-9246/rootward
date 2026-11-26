@@ -23,13 +23,14 @@ public final class AccBackend {
     private static final String SELECT = "^(resume_capacity|pause_capacity|shutdown_capacity|"
             + "max_temp|resume_temp|shutdown_temp|cooldown_temp|cooldown_capacity|"
             + "cooldown_charge|cooldown_pause|cooldown_current|prioritize_batt_idle_mode|"
-            + "allow_idle_above_pcap|charging_switch|max_charging_current|max_charging_voltage)=";
+            + "allow_idle_above_pcap|force_off|charging_switch|max_charging_current|max_charging_voltage)=";
     private static final String SNAPSHOT =
             "printf '\\n__VERSION__\\n'\n"
             + "\"$acc\" -v || exit $?\n"
             + "\"$acc\" -D >/dev/null 2>&1; daemon_code=$?\n"
             + "printf '\\n__DAEMON__\\n%s\\n__SETTINGS__\\n' \"$daemon_code\"\n"
             + "\"$acc\" -sp '" + SELECT + "' || exit $?\n"
+            + StrictHold.SNAPSHOT
             + "cd /sys/class/power_supply || exit 0\n"
             + "for node in usb/online battery/cycle_count bms/cycle_count; do\n"
             + "  if [ -r \"$node\" ]; then printf '\\n@%s=%s\\n' \"$node\" "
@@ -42,6 +43,12 @@ public final class AccBackend {
 
     public static final class State {
         public final int lower, upper, resumeTemp, maxTemp;
+        /** Configured option, not proof that ACC is currently enforcing a hold. */
+        public final Boolean forceOff;
+        /** Persisted opt-in (null when unavailable). The PID handshake is reported separately. */
+        public final Boolean cableHold;
+        public final boolean holding, holdLoaded;
+        public final boolean resumeOverridesCapacity;
         public final String version, daemon, settings, details;
         /** Hardware readings taken at snapshotMillis, independent of Android's battery broadcasts. */
         public final Integer usbOnline, cycleCount;
@@ -85,6 +92,16 @@ public final class AccBackend {
             upper = number("pause_capacity");
             maxTemp = number("max_temp");
             resumeTemp = number("resume_temp");
+            resumeOverridesCapacity = fields.get("resume_temp").endsWith("r");
+            String configured = fields.get("force_off");
+            forceOff = "true".equals(configured) ? Boolean.TRUE
+                    : "false".equals(configured) ? Boolean.FALSE : null;
+            String holdSetting = fields.get("@hold_setting");
+            cableHold = "true".equals(holdSetting) ? Boolean.TRUE
+                    : StrictHold.VERSION.equals(version) && "false".equals(holdSetting) ? Boolean.FALSE : null;
+            holding = Boolean.TRUE.equals(cableHold) && "true".equals(fields.get("@hold_phase"));
+            holdLoaded = StrictHold.VERSION.equals(version) && "运行中".equals(daemon)
+                    && "true".equals(fields.get("@hold_loaded"));
             settings = report.toString().trim();
             details = "ACC " + version + " · 守护进程" + daemon;
         }
@@ -135,18 +152,37 @@ public final class AccBackend {
             throw new IOException("暂停温度须低于 ACC 的关机温度 " + shutdown + "°C。");
         }
         // ACC uses an optional r to override resume_capacity. Preserve this existing policy.
-        String value = resume + (current.fields.get("resume_temp").endsWith("r") ? "r" : "");
+        String value = resume + (current.resumeOverridesCapacity ? "r" : "");
         State saved = write("resume_temp=" + value + " max_temp=" + pause);
         if (!value.equals(saved.fields.get("resume_temp")) || saved.maxTemp != pause) throw mismatch();
         return saved;
     }
 
-    private static State write(String numericFields) throws Exception {
+    public static synchronized State setCableHold(boolean enabled, String pluginBody, boolean seedHold) throws Exception {
+        State current = read();
+        if (current.cableHold == null) throw new IOException("当前 ACC 版本或插件路径不支持跨插拔保持。");
+        if (enabled) {
+            if (!StrictHold.VERSION.equals(current.version) || !"运行中".equals(current.daemon)) {
+                throw new IOException("请先运行受支持版本的 ACC 守护进程。");
+            }
+            if (current.lower >= current.upper || current.upper > 100 || current.resumeOverridesCapacity) {
+                throw new IOException("跨插拔保持需要有效的百分比区间，且恢复温度不能覆盖电量下限。");
+            }
+        }
+        State saved = snapshot(writeDeadline() + StrictHold.command(enabled, pluginBody, seedHold));
+        if (!Boolean.valueOf(enabled).equals(saved.cableHold) || (enabled && !saved.holdLoaded)) throw mismatch();
+        return saved;
+    }
+
+    private static State write(String fields) throws Exception {
+        return snapshot(writeDeadline() + "\"$acc\" -s " + fields + " || exit $?\n");
+    }
+
+    private static String writeDeadline() {
         // Root managers can keep a permission prompt open after the UI times out.
         long expires = System.currentTimeMillis() / 1000 + 40;
-        return snapshot("if [ \"$(date +%s)\" -ge " + expires
-                + " ]; then echo '本次写入已过期，请刷新重试'; exit 82; fi\n"
-                + "\"$acc\" -s " + numericFields + " || exit $?\n");
+        return "if [ \"$(date +%s)\" -ge " + expires
+                + " ]; then echo '本次写入已过期，请刷新重试'; exit 82; fi\n";
     }
 
     private static IOException mismatch() {

@@ -27,6 +27,8 @@ public final class BatteryView {
         void guide();
         void history();
         void onApplyTemperature(int resume, int pause);
+        void toggleCableHold();
+        void reloadCableHold();
     }
 
     public final View root;
@@ -42,6 +44,8 @@ public final class BatteryView {
 
     private TextView percentage, charge, supply, temp, currentValue, condition, driver, configured, diagnostics;
     private TextView voltageValue, powerValue, flowText, policyText, thermalState, markLegend;
+    private TextView cableHoldState;
+    private Button cableHoldButton, cableHoldReload;
     private String latestTemp = "—";
     private ScrollView dashboardPage, controlsPage;
     private Button dashboardTab, controlsTab, reload, diagnosticsButton, settingsButton, limitEntry;
@@ -273,6 +277,20 @@ public final class BatteryView {
         panel.addView(settingsButton);
         gap(panel, 12);
         chargeEditor = new PairEditor(panel, false);
+        gap(panel, 16);
+        panel.addView(label("跨插拔保持停充", 18, ink, true), block());
+        gap(panel, 4);
+        cableHoldState = label("等待读取 ACC 配置。", 14, quiet, false);
+        panel.addView(cableHoldState, block());
+        gap(panel, 6);
+        cableHoldButton = actionButton("开启跨插拔保持停充", washed, accent);
+        cableHoldButton.setEnabled(false);
+        cableHoldButton.setOnClickListener(v -> actions.toggleCableHold());
+        panel.addView(cableHoldButton, block());
+        cableHoldReload = actionButton("重新载入并沿用已保存阶段", washed, accent);
+        cableHoldReload.setOnClickListener(v -> actions.reloadCableHold());
+        cableHoldReload.setVisibility(View.GONE);
+        panel.addView(cableHoldReload, block());
         body.addView(panel, block());
 
         gap(body, 12);
@@ -420,7 +438,7 @@ public final class BatteryView {
             String lowDisplay = thermal ? lower + unit : (upper - lower) + " 个百分点";
             lowValue.setText(showDraft ? lowDisplay : "—");
             if (thermal) updateThermalState(showDraft);
-            else summary.setText(showDraft ? "自然降至 " + lower + "% 时允许恢复充电。" : "恢复电量待 ACC 回读。");
+            else summary.setText(showDraft ? "恢复电量设为 " + lower + "%。" : "恢复电量待 ACC 回读。");
             highValue.setText(showDraft ? upper + unit : "—");
             lowBar.setVisibility(showDraft ? View.VISIBLE : View.INVISIBLE);
             highBar.setVisibility(showDraft ? View.VISIBLE : View.INVISIBLE);
@@ -513,6 +531,33 @@ public final class BatteryView {
     }
 
     public void setTemperatures(int resume, int pause) { temperatureEditor.setSaved(resume, pause); }
+
+    public void setCableHold(Boolean enabled, boolean loaded, boolean holding, boolean temperatureOverridesCapacity,
+                             String checked) {
+        boolean on = Boolean.TRUE.equals(enabled);
+        String text;
+        if (enabled == null) {
+            text = "尚未读到兼容的 ACC 插件环境。";
+        } else if (on) {
+            text = "读取于 " + checked + " · " + (loaded ? "插件已载入" : "插件尚未在当前守护进程中载入")
+                    + "。已保存阶段：" + (holding ? "等恢复下限。" : "允许充向上限。");
+        } else {
+            text = "已关闭。开启会安装归根的 ACC 插件并重启 ACC 守护进程。";
+            if (deviceLower >= 0 && deviceUpper <= 100 && deviceLower < deviceUpper)
+                text += "到 " + deviceUpper + "% 停充后，即使拔线再接，也要降至 " + deviceLower
+                        + "% 或以下且满足温控才复充。";
+        }
+        if (enabled != null && temperatureOverridesCapacity)
+            text += " 当前恢复温度带 r，允许越过电量下限，与此策略冲突。";
+        cableHoldState.setText(text);
+        cableHoldButton.setText(on ? "关闭跨插拔保持停充" : "开启跨插拔保持停充");
+        boolean canEnable = writable && !working && !temperatureOverridesCapacity;
+        boolean available = !working && enabled != null && (on || canEnable);
+        cableHoldButton.setEnabled(available);
+        cableHoldButton.setAlpha(available ? 1f : 0.65f);
+        cableHoldReload.setVisibility(on && !loaded ? View.VISIBLE : View.GONE);
+        cableHoldReload.setEnabled(canEnable);
+    }
 
     private class Meter extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);

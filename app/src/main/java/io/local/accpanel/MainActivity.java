@@ -13,6 +13,10 @@ import android.os.Handler;
 import android.os.Looper;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -20,14 +24,22 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity implements BatteryView.Actions {
-    private static final int READ = 0, CAPACITY = 1, TEMPERATURE = 2;
+    private static final int READ = 0, CAPACITY = 1, TEMPERATURE = 2, CABLE_HOLD = 3, READ_PHASE = 4;
     private static final long SAMPLE_INTERVAL_MS = 10_000;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final History history = new History();
     private final Runnable sampleAgain = new Runnable() {
         @Override public void run() {
+            if (refreshPhase && !busy && !readingPhase) {
+                refreshPhase = false;
+                if (state != null && Boolean.TRUE.equals(state.cableHold)) MainActivity.this.run(READ_PHASE, 0, 0);
+            }
+            int oldLevel = batteryLevel, oldPlug = plugged;
             sample();
+            if (state != null && Boolean.TRUE.equals(state.cableHold)
+                    && (oldPlug != plugged || thresholdBand(oldLevel) != thresholdBand(batteryLevel)))
+                refreshPhase = true;
             handler.postDelayed(this, SAMPLE_INTERVAL_MS);
         }
     };
@@ -35,6 +47,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     private BatteryManager battery;
     private AccBackend.State state;
     private boolean busy;
+    private boolean refreshPhase, readingPhase;
     private String problem = "", checked = "";
     private String percent = "—", charging = "未知", power = "未知", temperature = "—", current = "—", health = "未知";
     private String voltage = "—";
@@ -52,6 +65,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
 
     @Override protected void onStart() {
         super.onStart();
+        refreshPhase = state != null && Boolean.TRUE.equals(state.cableHold);
         sampleAgain.run();
     }
 
@@ -138,6 +152,12 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         return state != null && state.lower <= 100 && state.upper <= 100 && "运行中".equals(state.daemon);
     }
 
+    private int thresholdBand(int level) {
+        if (level < 0) return -1;
+        if (level <= state.lower) return 0;
+        return level >= state.upper ? 2 : 1;
+    }
+
     private String powerFlow() {
         if (plugged < 0) return "供电来源未知";
         if (plugged == 0) return "电池 → 手机";
@@ -157,16 +177,17 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         if (cellTemperature >= state.maxTemp)
             return "电池温度已达到 " + state.maxTemp + "°C 暂停线。降至 " + state.resumeTemp + "°C 并满足其他条件后才允许恢复。";
         if (state.upper > 100 || state.lower > 100) return "ACC 正在使用电压阈值。";
-        if (plugged == 0) return "正在使用电池。下次接电时，ACC 的停充上限为 " + state.upper + "%。";
+        if (plugged == 0) return "正在使用电池。上限为 " + state.upper + "%，恢复电量设为 " + state.lower + "%。";
         if (plugged > 0 && batteryLevel >= state.upper && chargeStatus == BatteryManager.BATTERY_STATUS_CHARGING)
             return "已达到 " + state.upper + "% 停充线，Android 仍报告充电中。可在趋势中继续观察。";
         if (plugged > 0 && chargeStatus == BatteryManager.BATTERY_STATUS_CHARGING)
-            return "正在充电，本轮上限为 " + state.upper + "%。到达上限后允许电量自然回落。";
-        if (plugged > 0 && chargeStatus == BatteryManager.BATTERY_STATUS_NOT_CHARGING
-                && batteryLevel > state.lower)
-            return "电池未充电。按当前策略，自然降至 " + state.lower + "% 且满足温度等条件后允许恢复充电。";
-        return "充至 " + state.upper + "% 时暂停，自然回落 " + (state.upper - state.lower)
-                + " 个百分点至 " + state.lower + "% 时允许恢复。";
+            return "Android 报告正在充电。配置的停充上限为 " + state.upper + "%。";
+        if (plugged > 0 && chargeStatus == BatteryManager.BATTERY_STATUS_NOT_CHARGING) {
+            if (state.resumeOverridesCapacity)
+                return "Android 报告未充电。恢复温度带 r，达到该温度时 ACC 可越过电量下限。";
+            return "Android 报告未充电。停充上限为 " + state.upper + "%，恢复电量设为 " + state.lower + "%。";
+        }
+        return "停充上限为 " + state.upper + "%，恢复电量设为 " + state.lower + "%。";
     }
 
     private void render() {
@@ -191,7 +212,13 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         }
         ui.render(percent, charging, power, temperature, current, health, driver,
                 settings, details, canWrite(), busy);
-        ui.setElectrical(voltage, batteryWatts, powerFlow(), policyDescription());
+        ui.setCableHold(state == null ? null : state.cableHold, state != null && state.holdLoaded,
+                state != null && state.holding, state != null && state.resumeOverridesCapacity, checked);
+        String policy = policyDescription();
+        if (state != null && Boolean.TRUE.equals(state.cableHold))
+            policy += "\n" + checked + " 读回 · " + (state.holding ? "等待恢复下限" : "允许充向上限")
+                    + (state.holdLoaded ? "。" : "（阶段已保存，插件待载入）。");
+        ui.setElectrical(voltage, batteryWatts, powerFlow(), policy);
     }
 
     @Override public void refresh() {
@@ -200,26 +227,65 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     }
     @Override public void apply(int lower, int upper) { run(CAPACITY, lower, upper); }
     @Override public void onApplyTemperature(int resume, int pause) { run(TEMPERATURE, resume, pause); }
+    @Override public void toggleCableHold() {
+        if (busy || state == null || state.cableHold == null) return;
+        if (state.cableHold) {
+            run(CABLE_HOLD, 0, 0);
+            return;
+        }
+        if (!canWrite() || state.resumeOverridesCapacity) return;
+        sample();
+        if (batteryLevel >= state.upper) run(CABLE_HOLD, 1, 1);
+        else if (batteryLevel >= 0 && batteryLevel <= state.lower) run(CABLE_HOLD, 1, 0);
+        else new AlertDialog.Builder(this).setTitle("选择本轮巡航阶段")
+                .setItems(new String[]{"本轮已经到过上限，继续等下限", "本轮正在充向上限"},
+                        (dialog, index) -> run(CABLE_HOLD, 1, index == 0 ? 1 : 0))
+                .setNegativeButton("取消", null).show();
+    }
+    @Override public void reloadCableHold() {
+        if (!canWrite() || busy || !Boolean.TRUE.equals(state.cableHold) || state.holdLoaded
+                || state.resumeOverridesCapacity) return;
+        run(CABLE_HOLD, 1, state.holding ? 1 : 0);
+    }
+    private String readHoldPlugin() throws IOException {
+        try (InputStream source = getResources().openRawResource(R.raw.rootward_hold)) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int n;
+            while ((n = source.read(buffer)) != -1) bytes.write(buffer, 0, n);
+            return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+        }
+    }
     @Override public void history() { history.show(this); }
 
     private SharedPreferences original() { return getSharedPreferences("first_read", MODE_PRIVATE); }
 
     private void run(int action, int first, int second) {
-        if (busy || (action != READ && !canWrite())) return;
-        busy = true;
-        problem = "";
-        render();
+        boolean passive = action == READ_PHASE;
+        boolean reading = action == READ || passive;
+        if (busy || (!reading && !(action == CABLE_HOLD && first == 0) && !canWrite())) return;
+        if (passive) readingPhase = true;
+        else {
+            busy = true;
+            problem = "";
+            render();
+        }
         worker.execute(() -> {
             try {
                 AccBackend.State result;
                 if (action == CAPACITY) result = AccBackend.apply(first, second);
                 else if (action == TEMPERATURE) result = AccBackend.applyTemperature(first, second);
+                else if (action == CABLE_HOLD) result = AccBackend.setCableHold(first == 1, readHoldPlugin(), second == 1);
                 else result = AccBackend.read();
                 if (!original().contains("lower") && result.upper <= 100 && result.lower <= 100)
                     original().edit().putInt("lower", result.lower).putInt("upper", result.upper)
                             .putInt("resume", result.resumeTemp).putInt("pause", result.maxTemp).apply();
                 runOnUiThread(() -> {
                     if (isDestroyed() || isFinishing()) return;
+                    if (passive) {
+                        readingPhase = false;
+                        if (busy) return;
+                    }
                     busy = false;
                     AccBackend.State previous = state;
                     state = result;
@@ -228,12 +294,16 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                         ui.setThresholds(result.lower, result.upper);
                     if (previous == null || action == TEMPERATURE || previous.resumeTemp != result.resumeTemp || previous.maxTemp != result.maxTemp)
                         ui.setTemperatures(result.resumeTemp, result.maxTemp);
-                    if (action != READ) Toast.makeText(this, "已从 ACC 读回并核对新设置", Toast.LENGTH_SHORT).show();
+                    if (!reading) Toast.makeText(this, "已从 ACC 读回并核对新设置", Toast.LENGTH_SHORT).show();
                     render();
                 });
             } catch (Exception err) {
                 runOnUiThread(() -> {
                     if (isDestroyed() || isFinishing()) return;
+                    if (passive) {
+                        readingPhase = false;
+                        return;
+                    }
                     busy = false;
                     state = null;
                     problem = (action == READ ? "读取失败" : "写入未确认，请刷新核对")
@@ -245,7 +315,9 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     }
 
     @Override public void guide() {
-        String text = "上限与自然回落\n恢复电量等于停充上限减去回落的百分点数。例如设置上限 55%、回落 10 个百分点，电量自然降到 45% 时才允许复充。永久阈值由 ACC 在后台执行。外出前可手动提高上限，回来再调回。\n\n"
+        String text = "上限与自然回落\n恢复电量等于停充上限减去回落的百分点数。在「充电控制」打开「跨插拔保持停充」后，"
+                + "例如设为 50%–75%，ACC 充到 75% 停充，回落到 60% 时拔线再插仍须等到 50% 或以下，并满足温控才允许复充。"
+                + "从 50% 开始向上充电经过 60% 时则继续充。首次开启会重启 ACC 以载入插件。插件在后台保存本轮阶段；卸载归根前可先在充电控制里关闭。\n\n"
                 + "电池温度\n可先试 35°C 恢复、38°C 暂停。两者都指电池传感器温度。炎热时可能较久无法恢复，电量下限等条件也会影响复充。\n\n"
                 + "减少发热\n把手机放在通风阴凉处，重载游戏、导航与充电尽量错开。桌面使用可先试发热较低且功率够用的充电器。\n\n"
                 + "观察停充\n到达上限后保持负载稳定，在趋势中观察几分钟。电量平稳且电池净电流持续接近零，说明电池参与供电较少。单次读数无法确认硬件旁路。\n\n"

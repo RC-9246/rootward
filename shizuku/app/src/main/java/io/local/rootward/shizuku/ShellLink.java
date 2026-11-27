@@ -12,6 +12,7 @@ import android.os.Looper;
 import android.os.RemoteException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 import rikka.shizuku.Shizuku;
 
 /** Foreground diagnostic and explicit manual actions on a verified ADB UserService session. */
@@ -34,6 +35,7 @@ final class ShellLink {
   private String observedBattery = "";
   private int observed = ChargeBehaviour.UNAVAILABLE;
   private volatile int session;
+  private Consumer<String> waitingForUsage;
 
   private final Runnable timeout =
       () -> {
@@ -70,7 +72,7 @@ final class ShellLink {
     args =
         new Shizuku.UserServiceArgs(new ComponentName(activity, BatteryReader.class))
             .tag("rootward-diagnostics")
-            .version(3)
+            .version(4)
             .daemon(false)
             .processNameSuffix("battery_reader");
   }
@@ -204,8 +206,14 @@ final class ShellLink {
                     binding = false;
                     main.removeCallbacks(timeout);
                     reader = IBatteryReader.Stub.asInterface(b);
-                    if (live(server, reader)) run(ChargeBehaviour.PROBE);
-                    else disconnected(this);
+                    if (!live(server, reader)) {
+                      disconnected(this);
+                      return;
+                    }
+                    Consumer<String> waiting = waitingForUsage;
+                    waitingForUsage = null;
+                    if (waiting != null) appUsage(waiting);
+                    else run(ChargeBehaviour.PROBE);
                   });
             }
 
@@ -228,6 +236,52 @@ final class ShellLink {
     release();
     message = "驱动服务已断开，请重新读取。";
     refresh();
+  }
+
+  void appUsage(Consumer<String> callback) {
+    if (closed) return;
+    if (busy || waitingForUsage != null) {
+      callback.accept("另一项诊断正在进行，请稍后重试。");
+      return;
+    }
+    final IBinder gateway = server;
+    final IBatteryReader target = reader;
+    if (!live(gateway, target)) {
+      try {
+        if (ObserverApp.shellPermission() && Shizuku.pingBinder() && Shizuku.getUid() == 2000) {
+          if (!binding) start();
+          if (binding) {
+            waitingForUsage = callback;
+            return;
+          }
+        }
+      } catch (RuntimeException ignored) {
+      }
+      callback.accept("请先用 ADB 模式启动 Shizuku，并在上方的驱动诊断中授权。");
+      return;
+    }
+    final int generation = session;
+    busy = true;
+    refresh();
+    worker.execute(
+        () -> {
+          String report = "Shizuku 连接已断开，请重新读取。";
+          try {
+            if (generation == session && live(gateway, target)) report = target.appBatteryUsage();
+          } catch (RemoteException | RuntimeException ignored) {
+          }
+          String answer = report;
+          main.post(
+              () -> {
+                if (closed) return;
+                if (generation == session) {
+                  busy = false;
+                  refresh();
+                }
+                callback.accept(
+                    generation == session && live(gateway, target) ? answer : "Shizuku 连接已变更，请重试。");
+              });
+        });
   }
 
   interface LimitsResult {
@@ -380,13 +434,19 @@ final class ShellLink {
       Reading reading = Reading.now(context);
       if (reading != null
           && reading.level > prefs.getInt("low", 50)
-          && reading.level < prefs.getInt("high", 75)) edit.putInt("phase", ChargePhase.MANUAL);
+          && reading.level < prefs.getInt("high", 75)) {
+        BoostPlan.clear(edit).putInt("phase", ChargePhase.MANUAL);
+        context.getSystemService(android.app.NotificationManager.class).cancel(BoostPlan.NOTICE);
+      }
     }
     edit.apply();
   }
 
   private void release() {
     ++session;
+    Consumer<String> waiting = waitingForUsage;
+    waitingForUsage = null;
+    if (waiting != null && !closed) waiting.accept("Shizuku 连接失败或超时，请检查服务后重试。");
     ServiceConnection old = connection;
     connection = null;
     server = null;

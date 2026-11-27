@@ -1,11 +1,11 @@
 # Rootward · 归根
 
-Rootward is an Android battery-care app with a Chinese interface. The ACC edition controls charging on a compatible rooted phone. The Shizuku edition monitors stock phones and can also control charging when the kernel grants Android's shell access to the standard charging switch. Both support Android 8.0 and later.
+Rootward is an Android battery-care app with a Chinese interface. The ACC edition controls charging on a compatible rooted phone. The Shizuku edition monitors stock phones, can switch a dedicated charger outlet through Home Assistant, and supports on-device charging control when the kernel grants Android’s shell access to a compatible interface. Both support Android 8.0 and later.
 
 | 安装包 | 适合哪台手机 | 能做什么 |
 | --- | --- | --- |
 | [归根 1.5 · ACC 版](https://raw.githubusercontent.com/RC-9246/rootward/downloads/v1.5/Rootward-1.5.apk) | 已 root、内核支持停充 | 通过 ACC 控制真实充电，设置电量和温度区间，跨插拔保持停充，或手动、预约提前补电一次。 |
-| [归根 · Shizuku 1.1](https://raw.githubusercontent.com/RC-9246/rootward/downloads/v1.5/Rootward-Shizuku-1.1.apk) | 无 root，可通过 ADB 启动 Shizuku | 电量与高温提醒、跨插拔记忆、趋势、CSV 导出及 shell 电池诊断。在允许 shell 写入标准充电接口的机型，还可以主动开启前台硬件巡航。 |
+| [归根 · Shizuku 1.2](https://raw.githubusercontent.com/RC-9246/rootward/downloads/shizuku-v1.2/Rootward-Shizuku-1.2.apk) | 无 root，Shizuku 可选 | 跨插拔提醒、手动与预约补电、容量分析、养护方案、桌面组件和可选的 Home Assistant 插座控制。授权 Shizuku 后可读驱动和系统应用耗电，兼容机型可直接限充。 |
 
 两个版本使用独立包名，可以并存。若选择多个充电控制器，请检查各自的电量与温控限制。[Shizuku 版的功能、授权与构建方法](shizuku/README.md)
 

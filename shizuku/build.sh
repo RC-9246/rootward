@@ -111,5 +111,5 @@ fi
     --out "$stage/signed.apk" "$stage/aligned.apk"
 "$tools_dir/zipalign" -c 4 "$stage/signed.apk"
 "$tools_dir/apksigner" verify --verbose "$stage/signed.apk"
-mv -f "$stage/signed.apk" "$build_dir/Rootward-Shizuku-1.1.apk"
-echo "$build_dir/Rootward-Shizuku-1.1.apk"
+mv -f "$stage/signed.apk" "$build_dir/Rootward-Shizuku-1.2.apk"
+echo "$build_dir/Rootward-Shizuku-1.2.apk"

@@ -11,10 +11,12 @@ final class Reading {
   final long time;
   final int level, temp, mv, plug, status, cycles, chargeUah, health;
   final Integer current;
+  final boolean interactive;
   final long fullMs;
 
   private Reading(Context c, Intent i) {
     time = System.currentTimeMillis();
+    interactive = c.getSystemService(android.os.PowerManager.class).isInteractive();
     int raw = i.getIntExtra("level", -1), scale = i.getIntExtra("scale", 0);
     level = (raw >= 0 && raw <= scale && scale > 0) ? Math.round(raw * 100f / scale) : -1;
     temp = i.getIntExtra("temperature", Integer.MIN_VALUE);

@@ -1,14 +1,74 @@
 package io.local.rootward.shizuku;
 
+import android.content.Context;
+import android.os.Binder;
 import android.os.Process;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Fixed battery operations hosted in a Shizuku UserService. */
 public final class BatteryReader extends IBatteryReader.Stub {
+  private final Context serviceContext;
+
+  public BatteryReader() {
+    this(null);
+  }
+
+  // Shizuku 13 supplies the context used by the UserService. Older versions can still report UIDs.
+  public BatteryReader(Context context) {
+    serviceContext = context;
+  }
+
+  @Override
+  public synchronized String appBatteryUsage() {
+    if (Process.myUid() != 2000) throw new SecurityException("请以 ADB 模式启动 Shizuku");
+    int caller = Binder.getCallingUid();
+    java.lang.Process process;
+    try {
+      process =
+          new ProcessBuilder("/system/bin/dumpsys", "-t", "6", "batterystats", "-c", "--charged")
+              .redirectErrorStream(true)
+              .start();
+    } catch (IOException | SecurityException e) {
+      return "无法启动系统电池统计。";
+    }
+    FutureTask<String> result =
+        new FutureTask<>(
+            () -> {
+              AppBatteryUsage ranking = AppBatteryUsage.read(process.getInputStream(), caller);
+              if (process.waitFor() != 0) return "系统电池统计命令未成功完成，请稍后重试。";
+              return ranking.report(
+                  uid ->
+                      serviceContext == null
+                          ? null
+                          : serviceContext.getPackageManager().getPackagesForUid(uid));
+            });
+    Thread thread = new Thread(result, "battery-usage-reader");
+    thread.setDaemon(true);
+    try {
+      thread.start();
+      return result.get(8, TimeUnit.SECONDS);
+    } catch (TimeoutException e) {
+      return "系统电池统计超时，请稍后重试。";
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return "系统电池统计读取已中断。";
+    } catch (ExecutionException e) {
+      if (e.getCause() instanceof AppBatteryUsage.Unavailable) return e.getCause().getMessage();
+      return "无法读取系统电池统计。";
+    } finally {
+      process.destroyForcibly();
+      result.cancel(true);
+    }
+  }
+
   @Override
   public android.os.Bundle nativeLimit(
       String id, int low, int high, int side, int value, long expires) {
@@ -111,6 +171,8 @@ public final class BatteryReader extends IBatteryReader.Stub {
       {"设计容量（驱动原值，通常 µAh）", "battery/charge_full_design"},
       {"USB 在线", "usb/online"},
       {"USB 类型", "usb/usb_type"},
+      {"USB 驱动瞬时电流（µA）", "usb/current_now"},
+      {"USB 驱动瞬时电压（µV）", "usb/voltage_now"},
       {"USB 电流上限（µA）", "usb/current_max"},
       {"USB 电压上限（µV）", "usb/voltage_max"},
       {"电池驱动温度（0.1°C）", "battery/temp"}

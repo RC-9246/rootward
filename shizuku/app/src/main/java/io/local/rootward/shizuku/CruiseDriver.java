@@ -41,7 +41,7 @@ final class CruiseDriver {
     args =
         new Shizuku.UserServiceArgs(new ComponentName(context, BatteryReader.class))
             .tag("rootward-cruise")
-            .version(3)
+            .version(4)
             .daemon(false)
             .processNameSuffix("battery_cruise");
     thread.start();
@@ -250,6 +250,10 @@ final class CruiseDriver {
             prefs.getInt("high", 75));
     boolean hot =
         HardwareCruise.hot(prefs.getBoolean("thermal", false), temp, prefs.getInt("heat", 40));
+    boolean scheduled = BoostWindow.permits(
+        BoostPlan.stage(prefs, System.currentTimeMillis(), phase, level), level,
+        prefs.getInt("low", 50), prefs.getInt("high", 75), temp, hot);
+    if (scheduled) phase = ChargePhase.FILL;
     int operation = HardwareCruise.operation(active, observed, hold, phase, level, temp, hot);
     if (operation == HardwareCruise.NONE) {
       if (observed == ChargeBehaviour.INHIBITED && hold != Hold.OWNED)
@@ -279,6 +283,11 @@ final class CruiseDriver {
         problem("驱动未接受归根停充。已有的模式保持原样。");
       }
     } else {
+      if (scheduled && BoostPlan.stage(prefs, System.currentTimeMillis(),
+          prefs.getInt("phase", ChargePhase.FILL), level) != BoostWindow.Stage.OPEN) {
+        sample();
+        return;
+      }
       int after =
           reader
               .chargeMode(driver, ChargeBehaviour.RESUME)

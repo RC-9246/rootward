@@ -21,15 +21,14 @@ public final class AutomationSignal extends ContentProvider {
   private static final class Sample {
     String destination, request, phase;
     int level, lower, upper;
-    long time, elapsed;
+    long time, elapsed, appointment;
   }
   private static Sample latest;
   private static long lastNotice;
 
   static synchronized void publish(Context c, SharedPreferences p, int phase, int level,
-      int lower, int upper, int temperature) {
+      int lower, int upper, int temperature, boolean boost) {
     String destination = p.getString(RECIPIENT, "");
-    if (destination.isEmpty()) { latest = null; return; }
     Sample s = new Sample();
     s.destination = destination;
     s.level = level;
@@ -37,13 +36,16 @@ public final class AutomationSignal extends ContentProvider {
     s.upper = upper;
     s.elapsed = SystemClock.elapsedRealtime();
     s.time = System.currentTimeMillis();
-    s.phase = phase == ChargePhase.WAIT ? "waiting" : phase == ChargePhase.MANUAL ? "manual" : "filling";
-    if (phase == ChargePhase.WAIT || p.getBoolean("thermal", false)) s.request = "pause";
+    s.appointment = boost ? BoostPlan.start(p) : 0;
+    s.phase = boost ? "filling" : phase == ChargePhase.WAIT ? "waiting" : phase == ChargePhase.MANUAL ? "manual" : "filling";
+    if ((!boost && phase == ChargePhase.WAIT) || p.getBoolean("thermal", false)) s.request = "pause";
     else if (level < 0 || level > 100 || temperature == Integer.MIN_VALUE) s.request = "unknown";
     else s.request = "allow";
+    SmartOutlet.observe(c, s.request, s.appointment == 0 ? 0 : s.appointment + BoostWindow.HOUR);
+    if (destination.isEmpty()) { latest = null; return; }
     boolean changed = latest == null || !destination.equals(latest.destination)
         || !s.phase.equals(latest.phase) || !s.request.equals(latest.request)
-        || s.lower != latest.lower || s.upper != latest.upper || s.elapsed - lastNotice >= 60000;
+        || s.appointment != latest.appointment || s.lower != latest.lower || s.upper != latest.upper || s.elapsed - lastNotice >= 60000;
     latest = s;
     if (changed) {
       lastNotice = s.elapsed;
@@ -85,6 +87,9 @@ public final class AutomationSignal extends ContentProvider {
       Sample s = latest;
       if (s == null || !caller.equals(s.destination) || !p.getBoolean("watch", false)
           || SystemClock.elapsedRealtime() - s.elapsed > FRESH_MS) return result;
+      if (s.appointment > 0 && (BoostPlan.start(p) != s.appointment
+          || BoostPlan.stage(p, System.currentTimeMillis(), p.getInt("phase", ChargePhase.FILL), s.level)
+              != BoostWindow.Stage.OPEN)) return result;
       Object[] values = {s.request, s.phase, s.level < 0 ? null : s.level, s.lower, s.upper, s.time};
       MatrixCursor.RowBuilder row = result.newRow();
       for (String column : columns) row.add(values[Arrays.asList(COLUMNS).indexOf(column)]);

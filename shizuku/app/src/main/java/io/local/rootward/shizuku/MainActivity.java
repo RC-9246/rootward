@@ -8,7 +8,6 @@ import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.*;
-import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
 import android.widget.*;
@@ -28,6 +27,8 @@ public final class MainActivity extends Activity {
   private TextView level, state, metrics, limits, summary, phase, shizStatus, hardwareStatus;
   private Button watch, shizAction, pauseDriver, resumeDriver;
   private Switch manual, cruise;
+  private Button appointment;
+  private TextView appointmentDetail;
   private Graph graph;
   private Archive archive;
   private long lastChartRefresh = -60000;
@@ -103,6 +104,7 @@ public final class MainActivity extends Activity {
     level = text(hero, "—", 39, WHITE, true);
     state = text(hero, "", 17, WHITE, false);
     metrics = text(hero, "", 15, WHITE, false);
+    btn(hero, "供电与散热诊断", v -> PowerCareDialog.open(this));
     LinearLayout control = card(root, "充电区间", WHITE);
     limits = text(control, "", 16, INK, true);
     phase = text(control, "", 15, INK, false);
@@ -111,39 +113,16 @@ public final class MainActivity extends Activity {
     manual.setMinHeight(px(48));
     control.addView(manual);
     manual.setOnClickListener(v -> toggleManual());
+    appointment = btn(control, "预约单次补电", v -> BoostSetup.open(this, prefs, () -> {
+      refreshWatch();
+      render();
+    }));
+    appointmentDetail = text(control, "", 14, INK, false);
     watch = btn(control, "开始记录与提醒", v -> toggleWatch());
     btn(control, "设置电量与温度阈值", v -> configure());
-    btn(
-        control,
-        "打开系统电池设置",
-        v -> {
-          try {
-            Intent lineage = new Intent("org.lineageos.lineageparts.CHARGING_CONTROL_SETTINGS")
-                .setPackage("org.lineageos.lineageparts");
-            if (getPackageManager().resolveActivity(lineage, PackageManager.MATCH_SYSTEM_ONLY
-                    | PackageManager.MATCH_DEFAULT_ONLY) != null) {
-              startActivity(lineage);
-              return;
-            }
-          } catch (ActivityNotFoundException | SecurityException ignored) {
-            // The settings package may change while the app is open.
-          }
-          try {
-            startActivity(new Intent(Intent.ACTION_POWER_USAGE_SUMMARY));
-          } catch (ActivityNotFoundException e) {
-            startActivity(new Intent(Settings.ACTION_SETTINGS));
-          }
-        });
-    btn(
-        control,
-        "打开系统省电设置",
-        v -> {
-          try {
-            startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS));
-          } catch (ActivityNotFoundException e) {
-            msg("本机没有提供省电设置入口");
-          }
-        });
+    btn(control, "保存与切换养护方案", v -> CareProfiles.show(this, prefs, this::applyLimits));
+    btn(control, "打开系统电池设置", v -> PowerCareDialog.settings(this, false));
+    btn(control, "打开系统省电设置", v -> PowerCareDialog.settings(this, true));
     LinearLayout hw = card(root, "兼容设备充电开关", WHITE);
     hardwareStatus = text(hw, "", 15, INK, false);
     cruise = new Switch(this);
@@ -160,6 +139,22 @@ public final class MainActivity extends Activity {
     shizAction = btn(sh, "检查连接", v -> shell.act());
     btn(
         sh,
+        "查看各应用耗电估算",
+        v -> {
+          AlertDialog dialog =
+              new AlertDialog.Builder(this)
+                  .setTitle("各应用耗电估算")
+                  .setMessage("正在读取系统统计…")
+                  .setPositiveButton("关闭", null)
+                  .show();
+          shell.appUsage(
+              result -> {
+                if (!isFinishing() && !isDestroyed() && dialog.isShowing())
+                  dialog.setMessage(result);
+              });
+        });
+    btn(
+        sh,
         "打开 Shizuku 管理器",
         v -> {
           Intent i = getPackageManager().getLaunchIntentForPackage("moe.shizuku.privileged.api");
@@ -169,6 +164,7 @@ public final class MainActivity extends Activity {
     LinearLayout history = card(root, "本机记录", WHITE);
     summary = text(history, "", 15, INK, false);
     btn(history, "查看养护历史与接电记录", v -> historyReport());
+    btn(history, "用量与容量分析", v -> batteryAnalysis());
     text(history, "最近 1 小时电量 · 0–100%", 13, INK, false);
     graph = new Graph();
     history.addView(graph, new LinearLayout.LayoutParams(-1, px(75)));
@@ -188,6 +184,7 @@ public final class MainActivity extends Activity {
           }
         });
     btn(history, "连接本机自动化应用", v -> automationSettings());
+    btn(history, "Home Assistant 充电插座", v -> OutletDialog.show(this, this::refreshWatch));
     shell =
         new ShellLink(
             this,
@@ -199,6 +196,8 @@ public final class MainActivity extends Activity {
             });
     shell.open();
     render();
+    if (b == null && "io.local.rootward.shizuku.OPEN_OUTLET".equals(getIntent().getAction()))
+      OutletDialog.show(this, this::refreshWatch);
   }
 
   @Override
@@ -238,7 +237,7 @@ public final class MainActivity extends Activity {
             || "cruiseUncertain".equals(key)
             || "cruise".equals(key)
             || "watch".equals(key)
-            || "phase".equals(key)) render();
+            || BoostPlan.START.equals(key) || "phase".equals(key)) render();
       };
 
   private final BroadcastReceiver batteryChanged =
@@ -283,16 +282,28 @@ public final class MainActivity extends Activity {
     limits.setText(lo + "% 恢复提醒  ·  " + hi + "% 上限提醒  ·  " + hot + "°C 高温提醒");
     boolean alerts = getSystemService(NotificationManager.class).areNotificationsEnabled();
     boolean hardware = prefs.getBoolean("cruise", false);
-    manual.setText(hardware ? "手动继续充电一次" : "再次提醒我到达上限");
+    boolean outlet = SmartOutlet.prefs(this).getBoolean("active", false);
+    boolean sharing = !prefs.getString(AutomationSignal.RECIPIENT, "").isEmpty();
+    manual.setText(hardware || outlet ? "手动继续充电一次"
+        : sharing ? "手动放行本轮充电建议" : "再次提醒我到达上限");
+    String controlHint;
+    if (hardware) controlHint = "硬件状态见下方巡航读数，提前补电仍受温控约束。";
+    else if (outlet) controlHint = "本轮建议用于智能插座联动，供电状态以插座回读为准。";
+    else if (sharing) controlHint = "归根将本轮建议共享给指定应用，实际动作由接收方确认。";
+    else controlHint = "开关可重新安排上限提醒，实际充电由系统决定。";
+    BoostWindow.Stage planStage = BoostPlan.stage(prefs, System.currentTimeMillis(), p, r == null ? -1 : r.level);
+    String waiting = planStage == BoostWindow.Stage.OPEN
+        ? "预约窗口内按原上限 " + hi + "% 和温控处理。"
+        : "已到上限，记录回落至 " + lo + "%。";
     phase.setText(
         (on
                 ? (p == ChargePhase.WAIT
-                    ? "已到上限，记录回落至 " + lo + "%。"
+                    ? waiting
                     : p == ChargePhase.MANUAL
                         ? "本次已继续，达到 " + hi + "% 时再次提醒。"
                         : "正在等候到达 " + hi + "%。")
                 : "记录已暂停。")
-            + (hardware ? " 插拔不重置阶段。硬件状态见下方巡航读数，手动继续仍受温控约束。" : " 拔插不重置已记录阶段。此开关只控制提醒，实际充电由系统决定。")
+            + " 插拔不重置阶段。" + controlHint
             + (on && !alerts ? " 系统通知已关闭。" : ""));
     manual.setChecked(p == ChargePhase.MANUAL);
     manual.setEnabled(
@@ -301,6 +312,11 @@ public final class MainActivity extends Activity {
             && r.level > lo
             && r.level < hi
             && (p == ChargePhase.WAIT || p == ChargePhase.MANUAL));
+    long at = BoostPlan.start(prefs);
+    appointment.setText(at == 0 ? "预约单次补电" : "取消本轮预约");
+    appointment.setEnabled(at != 0 || BoostSetup.eligible(prefs, r));
+    appointmentDetail.setText(at == 0 ? "等待下限时可预约今天或明天提前补电，仍遵守原上限与温控。"
+        : "预约窗口　" + BoostPlan.window(at) + "。手动提前一轮会替换预约。");
     renderHardware();
     long now = SystemClock.elapsedRealtime();
     if (now - lastChartRefresh >= 60000 || hi != chartUpper || hot != chartHeat) {
@@ -406,6 +422,61 @@ public final class MainActivity extends Activity {
     }
   }
 
+  private void batteryAnalysis() {
+    files.execute(
+        () -> {
+          BatteryAnalysis report = archive.analysis();
+          Reading live = Reading.now(this);
+          int lo = prefs.getInt("low", 50), hi = prefs.getInt("high", 75);
+          String eta = "开启记录后可使用最新采样。";
+          if (prefs.getBoolean("watch", false) && live != null) {
+            int phase =
+                ChargePhase.sample(prefs.getInt("phase", ChargePhase.FILL), live.level, lo, hi);
+            boolean hot =
+                HardwareCruise.hot(
+                    prefs.getBoolean("thermal", false), live.temp, prefs.getInt("heat", 40));
+            boolean planned =
+                BoostWindow.permits(
+                    BoostPlan.stage(prefs, live.time, phase, live.level),
+                    live.level,
+                    lo,
+                    hi,
+                    live.temp,
+                    hot);
+            boolean held =
+                hot || live.temp == Integer.MIN_VALUE || (phase == ChargePhase.WAIT && !planned);
+            eta = report.pace.describe(live.time, live.level, live.plug, live.status, lo, hi, held);
+            if (planned && live.plug > 0) eta += " 预约窗口结束后将恢复原策略。";
+          }
+          String message = "按当前速率估算\n" + eta + "\n\n" + report.describe();
+          runOnUiThread(
+              () -> {
+                if (isDestroyed() || isFinishing()) return;
+                new AlertDialog.Builder(this)
+                    .setTitle("用量与容量分析")
+                    .setMessage(message)
+                    .setPositiveButton("完成", null)
+                    .setNeutralButton(
+                        "计算依据",
+                        (d, w) ->
+                            new AlertDialog.Builder(this)
+                                .setTitle("计算依据")
+                                .setMessage(
+                                    "到阈值时间取最近 30 分钟内同一电源、同一状态的连续变化。至少覆盖 5 分钟和 3"
+                                        + " 个百分点，只外推观测跨度的三倍以内。实际充电可能因温度、使用和降速变化。\n\n"
+                                        + "离电用量来自相邻电量样本的净变化。间隔超过 150 秒、同一间隔跳变超过 5"
+                                        + " 个百分点或记录服务中断时跳过该段。设备可交互状态来自 Android；旧记录只计入全部离电。\n\n"
+                                        + "容量来自 Android 剩余电荷计数（µAh）与电量百分比。每段接电最多取一段连续充电，限"
+                                        + " 5%–95%，需跨越至少 20 个百分点、持续 5 分钟。估算用增加的 mAh"
+                                        + " 除以电量占比；检查读数是否回退、是否随电量合理上升，并跳过疑似由整数电量直接换算的计数。\n\n"
+                                        + "多段比较时，保留在各段中位数 ±15% 内的结果，至少 3 段且占候选的三分之二，才显示保留结果的中位数。")
+                                .setPositiveButton("完成", null)
+                                .show())
+                    .show();
+              });
+        });
+  }
+
   private void historyReport() {
     new AlertDialog.Builder(this).setTitle("选择记录范围")
         .setItems(new String[]{"近 24 小时", "近 7 天", "近 30 天"}, (dialog, index) -> {
@@ -458,14 +529,15 @@ public final class MainActivity extends Activity {
     if (r == null) return;
     int lo = prefs.getInt("low", 50), hi = prefs.getInt("high", 75);
     int p = ChargePhase.toggleManual(prefs.getInt("phase", 0), r.level, lo, hi);
-    prefs.edit().putInt("phase", p).apply();
+    BoostPlan.clear(prefs.edit()).putInt("phase", p).apply();
+    getSystemService(NotificationManager.class).cancel(BoostPlan.NOTICE);
     refreshWatch();
     render();
   }
 
   private void toggleWatch() {
     if (prefs.getBoolean("watch", false)) {
-      prefs.edit().putBoolean("watch", false).putBoolean("cruise", false).apply();
+      BoostPlan.clear(prefs.edit()).putBoolean("watch", false).putBoolean("cruise", false).apply();
       try {
         startForegroundService(new Intent(this, WatchService.class).setAction("stop"));
       } catch (RuntimeException e) {
@@ -503,6 +575,25 @@ public final class MainActivity extends Activity {
     render();
   }
 
+  private void applyLimits(int lo, int hi, int hot) {
+    SharedPreferences.Editor edit =
+        prefs.edit().putInt("low", lo).putInt("high", hi).putInt("heat", hot);
+    if (prefs.getInt("phase", ChargePhase.FILL) == ChargePhase.MANUAL
+        && (lo != prefs.getInt("low", 50) || hi != prefs.getInt("high", 75))) {
+      edit.putInt("phase", ChargePhase.WAIT);
+      msg("已改用新电量区间，本次提前补电已结束");
+    }
+    if (lo != prefs.getInt("low", 50) || hi != prefs.getInt("high", 75)
+        || hot != prefs.getInt("heat", 40)) {
+      BoostPlan.clear(edit);
+      getSystemService(NotificationManager.class).cancel(BoostPlan.NOTICE);
+    }
+    edit.apply();
+    CareWidget.refresh(this);
+    refreshWatch();
+    render();
+  }
+
   private void configure() {
     LinearLayout panel = box();
     panel.setPadding(px(20), 0, px(20), 0);
@@ -526,17 +617,8 @@ public final class MainActivity extends Activity {
                     hot = Integer.parseInt(t.getText().toString());
                 if (lo < 0 || hi > 100 || lo >= hi || hot < 20 || hot > 65)
                   throw new NumberFormatException();
-                SharedPreferences.Editor edit =
-                    prefs.edit().putInt("low", lo).putInt("high", hi).putInt("heat", hot);
-                if (prefs.getInt("phase", ChargePhase.FILL) == ChargePhase.MANUAL
-                    && (lo != prefs.getInt("low", 50) || hi != prefs.getInt("high", 75))) {
-                  edit.putInt("phase", ChargePhase.WAIT);
-                  msg("已改用新电量区间，本次提前补电已结束");
-                }
-                edit.apply();
                 d.dismiss();
-                refreshWatch();
-                render();
+                applyLimits(lo, hi, hot);
               } catch (NumberFormatException ex) {
                 msg("电量范围为 0–100%，下限须小于上限。温度范围为 20–65°C。");
               }

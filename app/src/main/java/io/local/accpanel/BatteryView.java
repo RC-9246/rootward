@@ -17,6 +17,7 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
 
 /** Phone dashboard. All reads and writes are delegated to the activity. */
@@ -26,9 +27,11 @@ public final class BatteryView {
         void apply(int lower, int upper);
         void guide();
         void history();
+        void bundledAcc();
         void onApplyTemperature(int resume, int pause);
         void toggleCableHold();
         void reloadCableHold();
+        void toggleManualResume();
     }
 
     public final View root;
@@ -46,6 +49,8 @@ public final class BatteryView {
     private TextView voltageValue, powerValue, flowText, policyText, thermalState, markLegend;
     private TextView cableHoldState;
     private Button cableHoldButton, cableHoldReload;
+    private Switch manualResumeSwitch;
+    private TextView manualResumeHint;
     private String latestTemp = "—";
     private ScrollView dashboardPage, controlsPage;
     private Button dashboardTab, controlsTab, reload, diagnosticsButton, settingsButton, limitEntry;
@@ -108,6 +113,9 @@ public final class BatteryView {
         guide.setOnClickListener(v -> actions.guide());
         gap(controls, 8);
         controls.addView(guide, block());
+        Button module = actionButton("内置 ACC 模块", bg, accent);
+        module.setOnClickListener(v -> actions.bundledAcc());
+        controls.addView(module, block());
         controlsPage = page(controls);
         shell.addView(dashboardPage, new LinearLayout.LayoutParams(MATCH, 0, 1));
         shell.addView(controlsPage, new LinearLayout.LayoutParams(MATCH, 0, 1));
@@ -291,6 +299,16 @@ public final class BatteryView {
         cableHoldReload.setOnClickListener(v -> actions.reloadCableHold());
         cableHoldReload.setVisibility(View.GONE);
         panel.addView(cableHoldReload, block());
+        gap(panel, 10);
+        manualResumeSwitch = new Switch(activity);
+        manualResumeSwitch.setText("本次继续充电");
+        manualResumeSwitch.setTextSize(17);
+        manualResumeSwitch.setTextColor(ink);
+        manualResumeSwitch.setMinHeight(dp(48));
+        manualResumeSwitch.setOnClickListener(v -> actions.toggleManualResume());
+        panel.addView(manualResumeSwitch, block());
+        manualResumeHint = label("", 14, quiet, false);
+        panel.addView(manualResumeHint, block());
         body.addView(panel, block());
 
         gap(body, 12);
@@ -533,14 +551,14 @@ public final class BatteryView {
     public void setTemperatures(int resume, int pause) { temperatureEditor.setSaved(resume, pause); }
 
     public void setCableHold(Boolean enabled, boolean loaded, boolean holding, boolean temperatureOverridesCapacity,
-                             String checked) {
+                             boolean manualResume, int level, String checked) {
         boolean on = Boolean.TRUE.equals(enabled);
         String text;
         if (enabled == null) {
             text = "尚未读到兼容的 ACC 插件环境。";
         } else if (on) {
             text = "读取于 " + checked + " · " + (loaded ? "插件已载入" : "插件尚未在当前守护进程中载入")
-                    + "。已保存阶段：" + (holding ? "等恢复下限。" : "允许充向上限。");
+                    + "。已保存阶段：" + (manualResume ? "本次提前补至原上限。" : holding ? "等恢复下限。" : "允许充向上限。");
         } else {
             text = "已关闭。开启会安装归根的 ACC 插件并重启 ACC 守护进程。";
             if (deviceLower >= 0 && deviceUpper <= 100 && deviceLower < deviceUpper)
@@ -557,6 +575,18 @@ public final class BatteryView {
         cableHoldButton.setAlpha(available ? 1f : 0.65f);
         cableHoldReload.setVisibility(on && !loaded ? View.VISIBLE : View.GONE);
         cableHoldReload.setEnabled(canEnable);
+        manualResumeSwitch.setChecked(manualResume);
+        boolean inBand = level > deviceLower && level < deviceUpper;
+        manualResumeSwitch.setEnabled(!working && (manualResume || (canEnable && on && loaded && holding && inBand)));
+        String hint;
+        if (manualResume) hint = "本次允许补到 " + deviceUpper + "%，到上限自动关闭。提前关闭会恢复等待下限。";
+        else if (!on) hint = "开启跨插拔保持后，可以在回落途中提前补一次电。";
+        else if (!loaded) hint = "先重新载入巡航插件，再使用本次补电。";
+        else if (level >= deviceUpper) hint = "电量已到上限，回落到区间内后可手动补电。";
+        else if (temperatureOverridesCapacity) hint = "当前温度恢复规则与严格回落冲突。";
+        else if (holding) hint = "提前补到原上限 " + deviceUpper + "%，全程沿用 ACC 温控。";
+        else hint = "当前已允许向上充电，无需提前补电。";
+        manualResumeHint.setText(hint);
     }
 
     private class Meter extends View {

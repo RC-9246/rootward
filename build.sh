@@ -23,6 +23,12 @@ if [[ ! -r "$source_dir/java/io/local/accpanel/MainActivity.java" ]]; then
     echo "The launcher source MainActivity.java is missing." >&2
     exit 1
 fi
+acc_module="$source_dir/res/raw/acc_module.zip"
+expected_hash="fe071f77a6300f1c14aee1ffc8e22452e448635a7a40e6d97480f3b44fb8c795"
+if [[ "$(openssl dgst -sha256 -r "$acc_module" | cut -d' ' -f1)" != "$expected_hash" ]]; then
+    echo "Bundled ACC ZIP does not match the pinned upstream release." >&2
+    exit 1
+fi
 
 mkdir -p "$build_dir"
 stage="$(mktemp -d "$build_dir/.compile.XXXXXX")"

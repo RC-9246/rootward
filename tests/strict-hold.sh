@@ -31,6 +31,7 @@ t() { test "$@"; }
 tt() { case "$1" in *r) return 0;; esac; return 1; }
 volt_now() { echo 3990; }
 src_cfg() { . "$config"; }
+below_abs_lims() { src_cfg; return 0; }
 _ge_pause_cap() {
   if [ "${capacity[3]}" -gt 3000 ]; then [ "$(volt_now)" -ge "${capacity[3]}" ]
   else [ "$(cat "$battCapacity")" -ge "${capacity[3]}" ]; fi
@@ -55,7 +56,7 @@ if [ -n "${3:-}" ]; then
   done
 fi
 hold="$dataDir/rootward-hold/holding"
-loaded="$dataDir/rootward-hold/loaded-pid"
+loaded="$dataDir/rootward-hold/loaded-v2-pid"
 # Guard against ACC CLI, an unrelated process and a different module revision.
 (unset -f _ge_pause_cap; . "$plugin"; no_ command -v rootward_original_pause)
 echo 111111 > "$TMPDIR/acc.lock"
@@ -76,7 +77,8 @@ restart_at_midpoint() {
   if [ -n "${KSH_VERSION:-}" ]; then shell=$(command -v mksh || command -v sh)
   else shell=$(command -v bash); fi
   # New shell, same persistent files, no inherited plug-in functions/globals.
-  "$shell" -s "$plugin" "$scratch" "$1" <<'RESTART'
+  "$shell" -c '
+
 set -eu
 execDir="$2/module"; dataDir="$2/data"; TMPDIR="$2/runtime"
 config="$dataDir/config.txt"; battCapacity="$2/capacity"
@@ -88,10 +90,10 @@ _le_resume_cap() { [ "$(cat "$battCapacity")" -le "${capacity[2]}" ]; }
 . "$1"
 isAccd=true
 src_cfg
-[ "$(cat "$dataDir/rootward-hold/loaded-pid")" = "$$" ]
+[ "$(cat "$dataDir/rootward-hold/loaded-v2-pid")" = "$$" ]
 if _ge_pause_cap; then [ "$3" = holding ]; else [ "$3" = open ]; fi
 [ "$offMid" = false ]
-RESTART
+' restart "$plugin" "$scratch" "$1"
   echo "$$" > "$TMPDIR/acc.lock"
 }
 read_soc 60
@@ -114,6 +116,91 @@ for x in 74 70 60 60 51; do
   yes_ test -f "$hold"
 done
 restart_at_midpoint holding
+# A one-shot opens only the capacity gate. It is never an instruction to turn
+# on a switch, and it cannot erase the persisted strict hold while unplugged.
+once="$dataDir/rootward-hold/resume-once"
+printf '75\n' > "$once"
+read_soc 61
+no_ _ge_pause_cap
+yes_ _le_resume_cap
+yes_ test -f "$hold"
+restart_at_midpoint open
+for x in 54 49 55 74; do
+  read_soc "$x"
+  yes_ _le_resume_cap
+  yes_ test -f "$once"
+done
+yes_ below_abs_lims
+rm "$once"  # cancellation between polls.
+no_ below_abs_lims
+yes_ _ge_pause_cap
+no_ _le_resume_cap
+printf '75\n' > "$once"
+echo '?' > "$battCapacity"
+yes_ _ge_pause_cap
+no_ _le_resume_cap
+echo 75 > "$battCapacity"  # crossed between config refresh and decision
+no_ _le_resume_cap
+no_ test -e "$once"
+yes_ _ge_pause_cap
+read_soc 68
+no_ _le_resume_cap
+printf '75\n' > "$once"
+echo 'capacity=(5 50 50 80 false false)' >> "$config"
+read_soc 68
+no_ test -e "$once"
+yes_ _ge_pause_cap
+echo 'capacity=(5 50 50 75 false false)' >> "$config"
+read_soc 61
+
+if [ -n "${3:-}" ]; then
+  (
+    # One iteration of the bundled upstream dispatcher, using the unmodified
+    # accepted-charge and force-off branches. Stub hardware, not predicates.
+    src="$3/accd.sh"
+    for name in ctrl_charging force_off temp_ok _gt_resume_cap; do
+      fn=$(sed -n "/^  ${name}() {/,/^  }/p" "$src")
+      [ -n "$fn" ] || die "no $name in $src"
+      case "$name" in ctrl_charging) fn=$(printf '%s\n' "$fn" | sed 's/^    while :; do$/    for single_poll in 1; do/') ;; esac
+      eval "$fn"
+    done
+    temp="$scratch/temp"; loopDelay=(1 1); cooldown=false; capacitySync=false
+    forceOff=true; allowIdleAbovePcap=true; chgStatusCode=1; resetBattStats=(false false false)
+    cooldownCurrent=; cooldownRatio=(); cooldownCustom=(); count=0
+    _uptime() { return 1; }
+    is_charging() { src_cfg; test -f "$scratch/is-charging"; }
+    sleep() { command sleep 0.12; }
+    flip_sw() { test "$1" = off; echo off >> "$scratch/flips"; }
+    enable_charging() {
+      # The stock dispatcher has already reaped the force-off trigger.
+      for f in "$TMPDIR"/.forceoff*; do [ ! -f "$f" ] || die "stale force-off"; done
+      touch "$scratch/is-charging"
+    }
+    disable_charging() { rm -f "$scratch/is-charging"; }
+    # Start the real force_off worker so user feedback is verified with a
+    # previously active worker (the common strictly-held configuration).
+    printf '75\n' > "$once"; echo 449 > "$temp"
+    force_off 2>/dev/null
+    ctrl_charging 2>/dev/null
+    set +x
+    yes_ test -f "$scratch/is-charging"
+    # Heat pauses in the charging branch and the native resume threshold
+    # remains effective until temperature returns to <=45 °C.
+    echo 500 > "$temp"; ctrl_charging 2>/dev/null; set +x
+    no_ test -f "$scratch/is-charging"
+    echo 470 > "$temp"; ctrl_charging 2>/dev/null; set +x
+    no_ test -f "$scratch/is-charging"
+    echo 450 > "$temp"; ctrl_charging 2>/dev/null; set +x
+    yes_ test -f "$scratch/is-charging"
+    echo 75 > "$battCapacity"; ctrl_charging 2>/dev/null; set +x
+    no_ test -f "$scratch/is-charging"
+    no_ test -e "$once"
+    yes_ test -f "$hold"
+    rm -f "$TMPDIR"/.forceoff*
+    wait
+  )
+  read_soc 61
+fi
 # Temperature's native 'r' override must not clear the capacity hold.
 echo 'temperature=(35 50 45r 55)' >> "$config"
 read_soc 61

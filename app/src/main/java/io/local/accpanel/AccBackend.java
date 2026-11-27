@@ -48,6 +48,8 @@ public final class AccBackend {
         /** Persisted opt-in (null when unavailable). The PID handshake is reported separately. */
         public final Boolean cableHold;
         public final boolean holding, holdLoaded;
+        /** Persisted permission to top up to the previously approved upper threshold once. */
+        public final boolean manualResume;
         public final boolean resumeOverridesCapacity;
         public final String version, daemon, settings, details;
         /** Hardware readings taken at snapshotMillis, independent of Android's battery broadcasts. */
@@ -99,7 +101,8 @@ public final class AccBackend {
             String holdSetting = fields.get("@hold_setting");
             cableHold = "true".equals(holdSetting) ? Boolean.TRUE
                     : StrictHold.VERSION.equals(version) && "false".equals(holdSetting) ? Boolean.FALSE : null;
-            holding = Boolean.TRUE.equals(cableHold) && "true".equals(fields.get("@hold_phase"));
+            manualResume = Boolean.TRUE.equals(cableHold) && "true".equals(fields.get("@manual_resume"));
+            holding = !manualResume && Boolean.TRUE.equals(cableHold) && "true".equals(fields.get("@hold_phase"));
             holdLoaded = StrictHold.VERSION.equals(version) && "运行中".equals(daemon)
                     && "true".equals(fields.get("@hold_loaded"));
             settings = report.toString().trim();
@@ -171,6 +174,24 @@ public final class AccBackend {
         }
         State saved = snapshot(writeDeadline() + StrictHold.command(enabled, pluginBody, seedHold));
         if (!Boolean.valueOf(enabled).equals(saved.cableHold) || (enabled && !saved.holdLoaded)) throw mismatch();
+        return saved;
+    }
+
+    public static synchronized State setManualResume(boolean enabled, String pluginBody) throws Exception {
+        State current = read();
+        if (enabled) {
+            if (!Boolean.TRUE.equals(current.cableHold) || !current.holdLoaded) {
+                throw new IOException("请先开启严格巡航，并确认 ACC 守护进程已载入插件。");
+            }
+            if (current.manualResume) return current;
+            if (!current.holding || current.resumeOverridesCapacity) {
+                throw new IOException("当前未在严格回落阶段，或恢复温度配置覆盖了电量下限。");
+            }
+        } else if (!current.manualResume) {
+            return current;
+        }
+        State saved = snapshot(writeDeadline() + StrictHold.manualCommand(enabled, pluginBody));
+        if (saved.manualResume != enabled) throw mismatch();
         return saved;
     }
 

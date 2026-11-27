@@ -1,16 +1,28 @@
 # Rootward · 归根
 
-Rootward is a native Android dashboard for [Advanced Charging Controller (ACC)](https://github.com/VR-25/acc). It shows battery readings and lets you set charge and temperature limits on a rooted phone. The interface is in Chinese.
+Rootward is an Android battery-care app with a Chinese interface. The ACC edition controls charging on a compatible rooted phone. The Shizuku edition monitors stock phones and can also control charging when the kernel grants Android's shell access to the standard charging switch. Both support Android 8.0 and later.
 
-[Download the signed APK](https://github.com/RC-9246/rootward/releases/latest)
+| 安装包 | 适合哪台手机 | 能做什么 |
+| --- | --- | --- |
+| [归根 1.4 · ACC 版](https://github.com/RC-9246/rootward/releases/download/v1.4/Rootward-1.4.apk) | 已 root、内核支持停充 | 通过 ACC 控制真实充电，设置电量和温度区间，跨插拔保持停充，或手动提前补电一次。 |
+| [归根 · Shizuku 1.0](https://github.com/RC-9246/rootward/releases/download/v1.4/Rootward-Shizuku-1.0.apk) | 无 root，可通过 ADB 启动 Shizuku | 电量与高温提醒、跨插拔记忆、趋势、CSV 导出及 shell 电池诊断。在允许 shell 写入标准充电接口的机型，还可以主动开启前台硬件巡航。 |
 
-归根是一个 Android 电池仪表盘，也是 Advanced Charging Controller（ACC）的图形界面。支持 Android 8.0 及以上。充电控制需要设备已取得 root 权限、安装兼容版本的 ACC，并运行 ACC 守护进程。
+两个版本使用独立包名，可以并存。[Shizuku 版的功能、授权与构建方法](shizuku/README.md)
+
+## 内置 ACC 与 Magisk
+
+ACC 版通过标准 `su` 获取用户授予的 root 权限，Magisk 可以提供该权限并安装 ACC 模块。使用其他 root 方案时，除了兼容的 `su` 和硬件充电开关，还需满足 ACC 的 BusyBox 依赖，并在开机后运行 `/data/adb/vr25/acc/service.sh` 初始化守护进程。[ACC v2023.10.16 安装要求](https://github.com/VR-25/acc/blob/v2023.10.16/README.md#requirements)
+
+1.4 的签名 APK 内置 VR25 发布的原版 ACC 模块。首次安装时，在「充电控制 → 内置 ACC 模块 → 导出模块 ZIP」选择保存位置，然后在 Magisk 的「模块 → 从本地安装」选择该 ZIP。按管理器提示完成安装并回到归根刷新。模块已经安装时，归根直接连接现有守护进程。升级归根本身会保留 ACC 配置。
+
+内置资产为 `acc_v2023.10.16_202310160.zip`，SHA-256 为 `fe071f77a6300f1c14aee1ffc8e22452e448635a7a40e6d97480f3b44fb8c795`。APK 离线保存完整模块，导出前校验其摘要。ACC 的版权归 VR25（2017–2023）所有，使用 GNU GPL v3 或更高版本分发。ZIP 保留上游的 `License.md`、源脚本、构建脚本、文档和署名。[ACC 官方发行包](https://github.com/VR-25/acc/releases/tag/v2023.10.16) · [此版本的完整源码与许可证](https://github.com/VR-25/acc/tree/v2023.10.16)
 
 ## 使用
 
 - **仪表盘**显示系统报告的电量、温度、电池电流与健康状态，并用电池电压和电流估算电池端功率。打开「查看趋势」可查看前台采样记录。部分机型只提供其中一部分读数。
 - **充电控制**可设置停充上限与自然回落幅度。例如将上限设为 55%、回落设为 10 个百分点，常规恢复阈值就是 45%。温度保护可独立设置暂停与恢复温度。
 - **跨插拔保持停充**位于「充电控制」的电量区间下方。例如上限为 75%、恢复电量为 50%，开启后 ACC 到 75% 停充，此后即使在 60% 拔线并重新接入，也须等到 50% 或以下且温度等条件允许才复充。若本轮从低电量向上充，经过 60% 时仍可继续充到 75%。
+- **本次继续充电**用于已经到过上限、正在等回落的这一轮。例如在 60% 时打开，温度允许且有外部电源时，ACC 可提前恢复充电。到原上限 75% 后开关自动关闭，重新等 50%；中途关掉也会恢复等待。中间插拔线或退出应用会保留本次选择。首次从 1.3 使用这项操作时，归根会升级自己的巡航插件并重启一次 ACC 守护进程。
 - 首次点击开启时，归根从签名 APK 安装自己的 ACC 插件，并重启 ACC 守护进程以载入插件。原有电量、温度和 `force_off` 设置保留。开启时电量已达上限便从等下限开始，已到下限则允许充电。若处在两者之间或暂时没有电量读数，请按本轮情况选择「已经到过上限」或「正在充向上限」。
 - 插件保存本轮阶段，拔线、换线、退出归根均保留该阶段。仪表盘分别展示最近读回的阶段和 Android 上报的充电状态。USB 重新协商时，驱动可能短时恢复供电，ACC 需要轮询并重新施加停充。若显示「插件待载入」，可重新载入并沿用已保存阶段。卸载归根前，可在充电控制中关闭插件。
 - 此功能适配 ACC v2023.10.16 的默认配置、百分比阈值和可用的硬件停充开关。严格模式用保存的阶段处理守护重启时的区间中段，原配置中的 `off_mid` 保留。若 `resume_temp` 带 `r`，ACC 可按温度越过恢复电量，归根会提示冲突并禁止开启跨插拔保持。

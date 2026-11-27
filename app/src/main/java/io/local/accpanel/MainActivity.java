@@ -24,7 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity implements BatteryView.Actions {
-    private static final int READ = 0, CAPACITY = 1, TEMPERATURE = 2, CABLE_HOLD = 3, READ_PHASE = 4;
+    private static final int READ = 0, CAPACITY = 1, TEMPERATURE = 2, CABLE_HOLD = 3, READ_PHASE = 4, MANUAL_RESUME = 5;
     private static final long SAMPLE_INTERVAL_MS = 10_000;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -213,10 +213,11 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         ui.render(percent, charging, power, temperature, current, health, driver,
                 settings, details, canWrite(), busy);
         ui.setCableHold(state == null ? null : state.cableHold, state != null && state.holdLoaded,
-                state != null && state.holding, state != null && state.resumeOverridesCapacity, checked);
+                state != null && state.holding, state != null && state.resumeOverridesCapacity,
+                state != null && state.manualResume, batteryLevel, checked);
         String policy = policyDescription();
         if (state != null && Boolean.TRUE.equals(state.cableHold))
-            policy += "\n" + checked + " 读回 · " + (state.holding ? "等待恢复下限" : "允许充向上限")
+            policy += "\n" + checked + " 读回 · " + (state.manualResume ? "本次提前补至原上限" : state.holding ? "等待恢复下限" : "允许充向上限")
                     + (state.holdLoaded ? "。" : "（阶段已保存，插件待载入）。");
         ui.setElectrical(voltage, batteryWatts, powerFlow(), policy);
     }
@@ -247,6 +248,10 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                 || state.resumeOverridesCapacity) return;
         run(CABLE_HOLD, 1, state.holding ? 1 : 0);
     }
+    @Override public void toggleManualResume() {
+        if (state == null || busy || (!state.manualResume && !canWrite())) { render(); return; }
+        run(MANUAL_RESUME, state.manualResume ? 0 : 1, 0);
+    }
     private String readHoldPlugin() throws IOException {
         try (InputStream source = getResources().openRawResource(R.raw.rootward_hold)) {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -263,7 +268,8 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     private void run(int action, int first, int second) {
         boolean passive = action == READ_PHASE;
         boolean reading = action == READ || passive;
-        if (busy || (!reading && !(action == CABLE_HOLD && first == 0) && !canWrite())) return;
+        boolean removingHoldOrOverride = first == 0 && (action == CABLE_HOLD || action == MANUAL_RESUME);
+        if (busy || (!reading && !removingHoldOrOverride && !canWrite())) return;
         if (passive) readingPhase = true;
         else {
             busy = true;
@@ -276,6 +282,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                 if (action == CAPACITY) result = AccBackend.apply(first, second);
                 else if (action == TEMPERATURE) result = AccBackend.applyTemperature(first, second);
                 else if (action == CABLE_HOLD) result = AccBackend.setCableHold(first == 1, readHoldPlugin(), second == 1);
+                else if (action == MANUAL_RESUME) result = AccBackend.setManualResume(first == 1, readHoldPlugin());
                 else result = AccBackend.read();
                 if (!original().contains("lower") && result.upper <= 100 && result.lower <= 100)
                     original().edit().putInt("lower", result.lower).putInt("upper", result.upper)
@@ -312,6 +319,18 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                 });
             }
         });
+    }
+
+    @Override public void bundledAcc() {
+        AccModule.show(this, state == null ? null : state.version);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == AccModule.CREATE_ZIP && resultCode == RESULT_OK
+                && data != null && data.getData() != null) {
+            AccModule.export(getApplicationContext(), data.getData());
+        }
     }
 
     @Override public void guide() {

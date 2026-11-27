@@ -1,6 +1,6 @@
 # 归根 · Shizuku | Rootward
 
-无需 root 的 Android 电池养护工具。支持 Android 8.0 及以上，界面使用中文，包名为 `io.local.rootward.shizuku`，可与归根 ACC 版并存。[下载签名 APK](https://raw.githubusercontent.com/RC-9246/rootward/downloads/shizuku-v1.2/Rootward-Shizuku-1.2.apk)
+无需 root 的 Android 电池养护工具。支持 Android 8.0 及以上，界面使用中文，包名为 `io.local.rootward.shizuku`，可与归根 ACC 版并存。[下载签名 APK](https://raw.githubusercontent.com/RC-9246/rootward/downloads/android17/Rootward-Shizuku-1.3.apk)
 
 | 手机和外设条件 | 可以使用的功能 |
 | --- | --- |
@@ -35,7 +35,7 @@
 ## Home Assistant 充电插座
 
 1. 在 Home Assistant 确认充电器独占一个可控制的开关实体，如 `switch.phone_charger`。为归根创建访问令牌，准备手机能访问、证书受 Android 系统信任的 HTTPS 地址。[Home Assistant 开关](https://www.home-assistant.io/integrations/switch/) · [访问令牌](https://developers.home-assistant.io/docs/auth_api/#long-lived-access-token)
-2. 在「本机记录 → Home Assistant 充电插座」填写服务器、实体 ID 和令牌。「验证并保存」只读取一次开关。令牌使用 Android Keystore 中的密钥加密保存在本机。只有使用此连接时归根才会联系所填服务器。[Home Assistant REST API](https://developers.home-assistant.io/docs/api/rest/)
+2. 在「本机记录 → Home Assistant 充电插座」填写服务器、实体 ID 和令牌。Android 17 及以后使用局域网服务器时，先点「局域网权限」，在系统弹窗中允许「附近的设备」。公网 HTTPS 地址可直接验证。已配置的家庭服务器在系统升级或撤权后，也可从同一入口恢复权限。「验证并保存」只读取一次开关。令牌使用 Android Keystore 中的密钥加密保存在本机。只有使用此连接时归根才会联系所填服务器。[Home Assistant REST API](https://developers.home-assistant.io/docs/api/rest/)
 3. 开始记录，在插座的「操作」中选择「按养护策略联动」。以 50%–75% 为例，达到 75% 请求断电，回落到 62% 时重插线仍会等待。到 50% 且温度允许时，归根才请求恢复自己已确认关闭的插座。手动或预约补电可以提前放行一轮。
 4. 归根会在每次切换后读回开关状态。插座原本已关、断电归属发生变化或上一次断电结果待核实时，自动化会保留其断电状态。可以在归根关闭联动、检查插座，再显式选「手动恢复供电」。读回结果来自 Home Assistant，手机是否在充电可对照首页的电池状态与电流。
 5. 插座断电后手机使用电池。手机关机、网络中断或应用被强行停止期间，如需自动恢复外部供电，可在家庭控制器或插座设置独立超时。希望使用 Tasker 等其他接收方时，可选用本机自动化接口。[本机自动化](../docs/automation.md)
@@ -86,15 +86,17 @@
 
 原生上下限由系统驱动解释，有些驱动仅在自定义充电模式下执行这些值。退出应用后设置可能继续保留。插拔时如何复充、是否包含边界值以及重启后是否保留设置取决于驱动。「撤销上一次修改」会将最近一次由归根成功更改的端点恢复为原值。记录保存在本机，退出并重新打开应用后仍可用。撤销前会再次核对电池身份、启动周期、写权限和两端实际值，完成后读回上下限。若期间更换电池、系统改过区间、写入回执不明或驱动联动修改另一端，界面会说明原因并显示记录中的原值。已开启前台硬件巡航时仍可查看这些值，需关闭巡航后手动修改。手动恢复系统自动充电后，驱动自身的阈值仍然有效。[Android 通用内核的 power_supply ABI](https://android.googlesource.com/kernel/common/+/android-mainline/Documentation/ABI/testing/sysfs-class-power#356)
 
+[Android 版本与界面验证范围](../docs/android-compatibility.md)
+
 ## 从源码构建
 
-准备 Bash、JDK 17、Android SDK Platform 34 和 Build Tools 34.0.0，以及 curl、unzip、zip、openssl。将 `ANDROID_HOME` 指向 Android SDK 目录，在源码的 `shizuku/` 目录内运行以下命令。
+准备 Bash、JDK 17、Android SDK Platform 37.2 和 Build Tools 37.0.0，以及 curl、unzip、zip、openssl。将 `ANDROID_HOME` 指向 Android SDK 目录，在源码的 `shizuku/` 目录内运行以下命令。
 
 ```sh
 ./test.sh
 ./build.sh
 ```
 
-构建过程从 Maven Central 和 Google Maven 下载固定版本的依赖并验证 SHA-256，然后签名及校验 `build/Rootward-Shizuku-1.2.apk`。默认与 ACC 版共用仓库外的 `signing/` 目录，可用 `ACC_SIGNING_DIR` 设置其他私有目录。自行构建的更新包需复用同一签名密钥。
+构建过程从 Maven Central 和 Google Maven 下载固定版本的依赖并验证 SHA-256，然后签名及校验 `build/Rootward-Shizuku-1.3.apk`。默认与 ACC 版共用仓库外的 `signing/` 目录，可用 `ACC_SIGNING_DIR` 设置其他私有目录。自行构建的更新包需复用同一签名密钥。
 
 Shizuku API 13.1.5 使用 MIT 许可证，AndroidX Annotation 1.3.0 使用 Apache License 2.0，这两份许可证随 APK 及源码附带于 `app/src/main/res/raw/`。

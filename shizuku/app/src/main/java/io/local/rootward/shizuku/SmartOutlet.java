@@ -113,11 +113,12 @@ final class SmartOutlet {
     if (!p.edit().putString("owner", value).commit()) throw new IOException("本机状态未保存");
   }
 
-  private static String failure(Exception e) {
+  private static String failure(Context c, Exception e) {
     String text = e.getMessage();
     if (e instanceof IOException && text != null && text.startsWith("Home Assistant 返回 HTTP "))
       return text;
-    return "未确认插座状态，请检查网络、HTTPS 证书、令牌或实体";
+    return "未确认插座状态，请检查网络、HTTPS 证书、令牌或实体"
+        + (OutletNetwork.missing(c) ? "。访问局域网服务器时，请在充电插座页面授予局域网权限" : "");
   }
 
   private static String outcome(Context c, String message, boolean unresolved) {
@@ -192,7 +193,7 @@ final class SmartOutlet {
       mark(p, on ? "" : actual.changed);
       return outcome(c, on ? "已回读：插座恢复通电。" : "已回读：插座停止供电。", false);
     } catch (Exception e) {
-      return outcome(c, failure(e) + "。上一次动作可能仍然有效。", true);
+      return outcome(c, failure(c, e) + "。上一次动作可能仍然有效。", true);
     }
   }
 
@@ -225,7 +226,7 @@ final class SmartOutlet {
           } catch (IllegalArgumentException e) {
             reply(done, e.getMessage());
           } catch (Exception e) {
-            reply(done, failure(e));
+            reply(done, failure(app, e));
           }
         });
   }
@@ -258,7 +259,7 @@ final class SmartOutlet {
                     s.mode.equals("on") ? "插座报告通电。" : s.mode.equals("off") ? "插座报告断电。" : "插座状态未知。",
                     !s.known() || OutletPolicy.PENDING.equals(p.getString("owner", ""))));
           } catch (Exception e) {
-            reply(done, outcome(app, failure(e), true));
+            reply(done, outcome(app, failure(app, e), true));
           }
         });
   }

@@ -19,10 +19,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
-  private static final int INK = 0xff193b32,
-      GREEN = 0xff135d49,
-      PALE = 0xfff2f6f1,
-      WHITE = 0xffffffff;
+  private static final int GREEN = 0xff135d49;
+  private int ink, surface;
   private SharedPreferences prefs;
   private TextView level, state, metrics, limits, summary, phase, shizStatus, hardwareStatus;
   private Button watch, shizAction, pauseDriver, resumeDriver;
@@ -75,13 +73,15 @@ public final class MainActivity extends Activity {
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
     lp.bottomMargin = px(12);
     root.addView(p, lp);
-    text(p, title, 18, color == GREEN ? WHITE : INK, true);
+    text(p, title, 18, color == GREEN ? Color.WHITE : ink, true);
     return p;
   }
 
   private Button btn(LinearLayout p, String s, View.OnClickListener l) {
     Button b = new Button(this);
     b.setAllCaps(false);
+    b.setSingleLine(false);
+    b.setMaxLines(Integer.MAX_VALUE);
     b.setText(s);
     b.setOnClickListener(l);
     p.addView(b);
@@ -94,20 +94,29 @@ public final class MainActivity extends Activity {
     prefs = ObserverApp.prefs(this);
     archive = new Archive(this);
     ScrollView scroll = new ScrollView(this);
-    scroll.setBackgroundColor(PALE);
+    ink = getColor(R.color.body_ink);
+    surface = getColor(R.color.surface);
+    scroll.setId(R.id.observer_scroll);
+    scroll.setBackgroundColor(getColor(R.color.page));
     LinearLayout root = box();
     root.setPadding(px(16), px(12), px(16), px(8));
+    scroll.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+      int width = right - left - scroll.getPaddingLeft() - scroll.getPaddingRight();
+      int margin = Math.max(px(16), (width - px(680)) / 2);
+      if (root.getPaddingLeft() != margin) root.setPadding(margin, px(12), margin, px(8));
+    });
     scroll.addView(root);
     setContentView(scroll);
-    text(root, "归根 · Shizuku", 27, INK, true);
+    DisplayLayout.protectContent(this, scroll);
+    text(root, "归根 · Shizuku", 27, ink, true);
     LinearLayout hero = card(root, "电池概览", GREEN);
-    level = text(hero, "—", 39, WHITE, true);
-    state = text(hero, "", 17, WHITE, false);
-    metrics = text(hero, "", 15, WHITE, false);
+    level = text(hero, "—", 39, Color.WHITE, true);
+    state = text(hero, "", 17, Color.WHITE, false);
+    metrics = text(hero, "", 15, Color.WHITE, false);
     btn(hero, "供电与散热诊断", v -> PowerCareDialog.open(this));
-    LinearLayout control = card(root, "充电区间", WHITE);
-    limits = text(control, "", 16, INK, true);
-    phase = text(control, "", 15, INK, false);
+    LinearLayout control = card(root, "充电区间", surface);
+    limits = text(control, "", 16, ink, true);
+    phase = text(control, "", 15, ink, false);
     manual = new Switch(this);
     manual.setText("再次提醒我到达上限");
     manual.setMinHeight(px(48));
@@ -117,14 +126,14 @@ public final class MainActivity extends Activity {
       refreshWatch();
       render();
     }));
-    appointmentDetail = text(control, "", 14, INK, false);
+    appointmentDetail = text(control, "", 14, ink, false);
     watch = btn(control, "开始记录与提醒", v -> toggleWatch());
     btn(control, "设置电量与温度阈值", v -> configure());
     btn(control, "保存与切换养护方案", v -> CareProfiles.show(this, prefs, this::applyLimits));
     btn(control, "打开系统电池设置", v -> PowerCareDialog.settings(this, false));
     btn(control, "打开系统省电设置", v -> PowerCareDialog.settings(this, true));
-    LinearLayout hw = card(root, "兼容设备充电开关", WHITE);
-    hardwareStatus = text(hw, "", 15, INK, false);
+    LinearLayout hw = card(root, "兼容设备充电开关", surface);
+    hardwareStatus = text(hw, "", 15, ink, false);
     cruise = new Switch(this);
     cruise.setText("按阈值自动巡航");
     cruise.setMinHeight(px(48));
@@ -133,8 +142,8 @@ public final class MainActivity extends Activity {
     pauseDriver = btn(hw, "手动暂停充电", v -> shell.setPaused(true));
     resumeDriver = btn(hw, "恢复系统自动充电", v -> shell.setPaused(false));
     btn(hw, "查看系统原生限充", v -> NativeLimitsDialog.open(this, shell));
-    LinearLayout sh = card(root, "Shizuku 驱动诊断", WHITE);
-    shizStatus = text(sh, "", 15, INK, false);
+    LinearLayout sh = card(root, "Shizuku 驱动诊断", surface);
+    shizStatus = text(sh, "", 15, ink, false);
     shizStatus.setTextIsSelectable(true);
     shizAction = btn(sh, "检查连接", v -> shell.act());
     btn(
@@ -161,11 +170,11 @@ public final class MainActivity extends Activity {
           if (i == null) msg("未找到 Shizuku 管理器");
           else startActivity(i);
         });
-    LinearLayout history = card(root, "本机记录", WHITE);
-    summary = text(history, "", 15, INK, false);
+    LinearLayout history = card(root, "本机记录", surface);
+    summary = text(history, "", 15, ink, false);
     btn(history, "查看养护历史与接电记录", v -> historyReport());
     btn(history, "用量与容量分析", v -> batteryAnalysis());
-    text(history, "最近 1 小时电量 · 0–100%", 13, INK, false);
+    text(history, "最近 1 小时电量 · 0–100%", 13, ink, false);
     graph = new Graph();
     history.addView(graph, new LinearLayout.LayoutParams(-1, px(75)));
     btn(
@@ -497,14 +506,14 @@ public final class MainActivity extends Activity {
   private void automationSettings() {
     LinearLayout panel = box();
     panel.setPadding(px(20), 0, px(20), 0);
-    text(panel, "指定一个接收应用后，它可在记录期间读取当前电量、阈值和充电建议，用于联动自己的智能插座。最终开关状态由接收应用和插座确认。", 15, INK, false);
+    text(panel, "指定一个接收应用后，它可在记录期间读取当前电量、阈值和充电建议，用于联动自己的智能插座。最终开关状态由接收应用和插座确认。", 15, ink, false);
     EditText pkg = new EditText(this);
     pkg.setSingleLine(true);
     pkg.setHint("Android 包名，例如 net.dinglisch.android.taskerm");
     pkg.setText(prefs.getString(AutomationSignal.RECIPIENT, ""));
     panel.addView(pkg);
     AlertDialog dialog = new AlertDialog.Builder(this).setTitle("本机自动化")
-        .setView(panel).setPositiveButton("保存", null)
+        .setView(DisplayLayout.scrollForm(panel)).setPositiveButton("保存", null)
         .setNegativeButton("取消", null).setNeutralButton("关闭共享", (d, w) -> {
           AutomationSignal.select(this, prefs, "");
           msg("已关闭共享");
@@ -603,7 +612,7 @@ public final class MainActivity extends Activity {
     AlertDialog d =
         new AlertDialog.Builder(this)
             .setTitle("电量与温度阈值")
-            .setView(panel)
+            .setView(DisplayLayout.scrollForm(panel))
             .setPositiveButton("保存", null)
             .setNegativeButton("取消", null)
             .create();
@@ -626,7 +635,7 @@ public final class MainActivity extends Activity {
   }
 
   private EditText input(LinearLayout p, String label, int n) {
-    text(p, label, 14, INK, false);
+    text(p, label, 14, ink, false);
     EditText e = new EditText(this);
     e.setSingleLine(true);
     e.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -669,9 +678,9 @@ public final class MainActivity extends Activity {
     protected void onDraw(Canvas c) {
       float w = getWidth(), h = getHeight() - 4;
       paint.setStrokeWidth(px(1));
-      paint.setColor(0xffd9e6dc);
+      paint.setColor(getColor(R.color.chart_grid));
       for (int i = 0; i < 3; i++) c.drawLine(0, 2 + i * h / 2, w, 2 + i * h / 2, paint);
-      paint.setColor(GREEN);
+      paint.setColor(getColor(R.color.chart_line));
       paint.setStrokeWidth(px(2));
       PointF last = null;
       for (PointF p : data) {

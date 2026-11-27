@@ -4,8 +4,8 @@ Rootward is an Android battery-care app with a Chinese interface. The ACC editio
 
 | 安装包 | 适合哪台手机 | 能做什么 |
 | --- | --- | --- |
-| [归根 1.5 · ACC 版](https://raw.githubusercontent.com/RC-9246/rootward/downloads/v1.5/Rootward-1.5.apk) | 已 root、内核支持停充 | 通过 ACC 控制真实充电，设置电量和温度区间，跨插拔保持停充，或手动、预约提前补电一次。 |
-| [归根 · Shizuku 1.2](https://raw.githubusercontent.com/RC-9246/rootward/downloads/shizuku-v1.2/Rootward-Shizuku-1.2.apk) | 无 root，Shizuku 可选 | 跨插拔提醒、手动与预约补电、容量分析、养护方案、桌面组件和可选的 Home Assistant 插座控制。授权 Shizuku 后可读驱动和系统应用耗电，兼容机型可直接限充。 |
+| [归根 1.6 · ACC 版](https://raw.githubusercontent.com/RC-9246/rootward/downloads/android17/Rootward-1.6.apk) | 已 root、内核支持停充 | 通过 ACC 控制真实充电，设置电量和温度区间，跨插拔保持停充，或手动、预约提前补电一次。 |
+| [归根 · Shizuku 1.3](https://raw.githubusercontent.com/RC-9246/rootward/downloads/android17/Rootward-Shizuku-1.3.apk) | 无 root，Shizuku 可选 | 跨插拔提醒、手动与预约补电、容量分析、养护方案、桌面组件和可选的 Home Assistant 插座控制。授权 Shizuku 后可读驱动和系统应用耗电，兼容机型可直接限充。 |
 
 两个版本使用独立包名，可以并存。若选择多个充电控制器，请检查各自的电量与温控限制。[Shizuku 版的功能、授权与构建方法](shizuku/README.md)
 
@@ -30,11 +30,11 @@ ACC 版签名 APK 内置 VR25 发布的原版 ACC 模块。首次安装时，在
 - 在 root 管理器中授权归根，然后点「刷新」读取手机现有配置。点「应用」后，归根会从 ACC 读回设置并核对。「养护指南与初始设置」可恢复本应用首次读取的电量或温度区间。
 - 仪表盘显示带读取时间的 ACC 驱动电量、温度和状态，方便对照 Android 的显示值。单次补电使用 ACC 实际采用的电量判定。前台约每分钟复核，失去有效读数会停用相关写入。若明确读到 ACC 守护进程已停止，可以在应用内手动启动并核验状态。
 
-[查看能力边界、竞品功能取舍与验证范围](docs/capabilities.md)
+[查看能力边界和竞品功能取舍](docs/capabilities.md) · [Android 版本与界面验证范围](docs/android-compatibility.md)
 
 ## 构建与签名
 
-准备 Bash、JDK 17、Android SDK Platform 34、Build Tools 34.0.0、zip 与 openssl。将 `ANDROID_HOME` 指向本机 SDK 根目录，在项目根目录运行构建脚本。
+准备 Bash、JDK 17、Android SDK Platform 37.2、Build Tools 37.0.0、zip 与 openssl。将 `ANDROID_HOME` 指向本机 SDK 根目录，在项目根目录运行构建脚本。
 
 ```bash
 ./build.sh

@@ -1,7 +1,15 @@
 <resources>
     <string name="app_name">归根 · Shizuku</string>
     <color name="icon_background">#1B4C47</color>
+    <item type="id" name="observer_scroll" />
+    <color name="page">#F2F6F1</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="body_ink">#193B32</color>
+    <color name="chart_line">#135D49</color>
+    <color name="chart_grid">#D9E6DC</color>
+    <bool name="light_bars">true</bool>
     <style name="Theme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/page</item>
         <item name="android:colorAccent">#176854</item>
         <item name="android:statusBarColor">#173E36</item>
         <item name="android:navigationBarColor">#173E36</item>

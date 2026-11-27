@@ -1,0 +1,14 @@
+<resources>
+    <style name="Theme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#8DD9BD</item>
+        <item name="android:statusBarColor">@color/page</item>
+        <item name="android:navigationBarColor">@color/page</item>
+        <item name="android:windowBackground">@color/page</item>
+    </style>
+    <color name="page">#101814</color>
+    <color name="surface">#202D26</color>
+    <color name="body_ink">#E1EEE4</color>
+    <color name="chart_line">#82DCB3</color>
+    <color name="chart_grid">#536659</color>
+    <bool name="light_bars">false</bool>
+</resources>

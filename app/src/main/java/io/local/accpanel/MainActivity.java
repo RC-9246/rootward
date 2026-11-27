@@ -7,12 +7,20 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.graphics.Insets;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.InputType;
+import android.view.View;
+import android.view.WindowInsets;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
@@ -31,8 +39,9 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     private static final long SAMPLE_INTERVAL_MS = 10_000;
     private static final long CONTROL_REFRESH_MS = 60_000;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private final History history = new History();
+    // A recreated activity queues its fresh read behind any write already submitted by the old one.
+    private static final ExecutorService ACC_WORK = Executors.newSingleThreadExecutor();
+    private History history;
     private final Runnable sampleAgain = new Runnable() {
         @Override public void run() {
             if (state != null && !busy && !readingPhase
@@ -64,9 +73,26 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     @Override public void onCreate(Bundle bundle) {
         super.onCreate(bundle);
         battery = (BatteryManager) getSystemService(Context.BATTERY_SERVICE);
+        History retained = (History) getLastNonConfigurationInstance();
+        history = retained != null ? retained : new History();
         ui = new BatteryView(this, this);
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+            ui.root.setOnApplyWindowInsetsListener((view, insets) -> {
+                Insets safe = insets.getInsets(WindowInsets.Type.systemBars()
+                        | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+                view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+                return insets;
+            });
+        }
         setContentView(ui.root);
+        ui.restore(bundle);
         refresh();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        ui.save(state);
     }
 
     @Override protected void onStart() {
@@ -80,11 +106,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         super.onStop();
     }
 
-    @Override protected void onDestroy() {
-        // An already submitted ACC operation must finish its readback.
-        worker.shutdown();
-        super.onDestroy();
-    }
+    @Override public Object onRetainNonConfigurationInstance() { return history; }
 
     private void sample() {
         Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
@@ -251,21 +273,68 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         if (state.scheduledAt != 0) { run(SCHEDULE, 0, 0, 0); return; }
         Calendar suggested = Calendar.getInstance();
         suggested.add(Calendar.HOUR_OF_DAY, 1);
-        TimePickerDialog picker = new TimePickerDialog(this, (view, hour, minute) -> {
-            Calendar when = Calendar.getInstance();
-            when.set(Calendar.HOUR_OF_DAY, hour);
-            when.set(Calendar.MINUTE, minute);
-            when.set(Calendar.SECOND, 0);
-            when.set(Calendar.MILLISECOND, 0);
-            if (when.getTimeInMillis() <= System.currentTimeMillis()) when.add(Calendar.DATE, 1);
-            long at = when.getTimeInMillis() / 1000L;
-            new AlertDialog.Builder(this).setTitle("预约本轮补电")
-                    .setMessage(scheduleWindow(at) + "，温度和供电条件允许时可提前充到原上限。窗口结束、自然到达下限或更改电量区间后预约失效。")
-                    .setPositiveButton("预约", (d, w) -> run(SCHEDULE, 0, 0, at))
-                    .setNegativeButton("取消", null).show();
-        }, suggested.get(Calendar.HOUR_OF_DAY), suggested.get(Calendar.MINUTE), true);
-        picker.setTitle("选择开始补电的本地时间");
-        picker.show();
+        int hour = suggested.get(Calendar.HOUR_OF_DAY), minute = suggested.get(Calendar.MINUTE);
+        if (CareDialog.needsScroll(this)) {
+            LinearLayout fields = new LinearLayout(this);
+            fields.setOrientation(LinearLayout.VERTICAL);
+            EditText hours = timeField(fields, "小时（0–23）", hour);
+            EditText minutes = timeField(fields, "分钟（0–59）", minute);
+            Button next = new Button(this);
+            next.setText("继续");
+            fields.addView(next);
+            AlertDialog dialog = new CareDialog(this).setTitle("选择开始补电的本地时间")
+                    .setBody(fields).setNegativeButton("取消", null).create();
+            next.setOnClickListener(v -> {
+                int h = timeValue(hours, 23), m = timeValue(minutes, 59);
+                if (h < 0 || m < 0) return;
+                dialog.dismiss();
+                confirmSchedule(h, m);
+            });
+            dialog.show();
+        } else {
+            TimePickerDialog picker = new TimePickerDialog(this,
+                    (view, h, m) -> confirmSchedule(h, m), hour, minute, true);
+            picker.setTitle("选择开始补电的本地时间");
+            picker.show();
+        }
+    }
+
+    private EditText timeField(LinearLayout fields, String label, int value) {
+        TextView title = new TextView(this);
+        title.setText(label);
+        fields.addView(title);
+        EditText field = new EditText(this);
+        field.setId(View.generateViewId());
+        title.setLabelFor(field.getId());
+        field.setSingleLine(true);
+        field.setInputType(InputType.TYPE_CLASS_NUMBER);
+        field.setText(String.format(Locale.ROOT, "%02d", value));
+        field.setSelectAllOnFocus(true);
+        fields.addView(field);
+        return field;
+    }
+
+    private static int timeValue(EditText field, int max) {
+        try {
+            int n = Integer.parseInt(field.getText().toString().trim());
+            if (n >= 0 && n <= max) return n;
+        } catch (NumberFormatException ignored) {}
+        field.setError("请输入 0–" + max);
+        return -1;
+    }
+
+    private void confirmSchedule(int hour, int minute) {
+        Calendar when = Calendar.getInstance();
+        when.set(Calendar.HOUR_OF_DAY, hour);
+        when.set(Calendar.MINUTE, minute);
+        when.set(Calendar.SECOND, 0);
+        when.set(Calendar.MILLISECOND, 0);
+        if (when.getTimeInMillis() <= System.currentTimeMillis()) when.add(Calendar.DATE, 1);
+        long at = when.getTimeInMillis() / 1000L;
+        new CareDialog(this).setTitle("预约本轮补电")
+                .setMessage(scheduleWindow(at) + "，温度和供电条件允许时可提前充到原上限。窗口结束、自然到达下限或更改电量区间后预约失效。")
+                .setPositiveButton("预约", (d, w) -> run(SCHEDULE, 0, 0, at))
+                .setNegativeButton("取消", null).show();
     }
 
     @Override public void refresh() {
@@ -284,7 +353,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         Integer level = state.driverLevel;
         if (level != null && level >= state.upper) run(CABLE_HOLD, 1, 1);
         else if (level != null && level <= state.lower) run(CABLE_HOLD, 1, 0);
-        else new AlertDialog.Builder(this).setTitle("选择本轮巡航阶段")
+        else new CareDialog(this).setTitle("选择本轮巡航阶段")
                 .setItems(new String[]{"本轮已经到过上限，继续等下限", "本轮正在充向上限"},
                         (dialog, index) -> run(CABLE_HOLD, 1, index == 0 ? 1 : 0))
                 .setNegativeButton("取消", null).show();
@@ -330,7 +399,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
             problem = "";
             render();
         }
-        worker.execute(() -> {
+        ACC_WORK.execute(() -> {
             try {
                 AccBackend.State result;
                 if (action == CAPACITY) result = AccBackend.apply(first, second);
@@ -399,7 +468,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                 + "减少发热\n把手机放在通风阴凉处，重载游戏、导航与充电尽量错开。桌面使用可先试发热较低且功率够用的充电器。\n\n"
                 + "观察停充\n到达上限后保持负载稳定，在趋势中观察几分钟。电量平稳且电池净电流持续接近零，说明电池参与供电较少。单次读数无法确认硬件旁路。\n\n"
                 + "手机久置\n在约一半电量时关机，放在阴凉干燥处，定期查看余量。日常无需为养护刻意放到自动关机。";
-        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("养护指南").setMessage(text)
+        CareDialog b = new CareDialog(this).setTitle("养护指南").setMessage(text)
                 .setPositiveButton("完成", null);
         if (original().contains("lower") && canWrite() && !busy) b.setNeutralButton("恢复初始值…", (d, w) -> restore());
         b.show();
@@ -410,7 +479,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         int lower = p.getInt("lower", -1), upper = p.getInt("upper", -1);
         int resume = p.getInt("resume", -1), pause = p.getInt("pause", -1);
         String[] options = {"电量区间   " + lower + "–" + upper + "%", "温度区间   " + resume + "–" + pause + " °C"};
-        new AlertDialog.Builder(this).setTitle("恢复本应用首次读取的设置")
+        new CareDialog(this).setTitle("恢复本应用首次读取的设置")
                 .setItems(options, (d, w) -> {
                     if (w == 0) apply(lower, upper);
                     else onApplyTemperature(resume, pause);

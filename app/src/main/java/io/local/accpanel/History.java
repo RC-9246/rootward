@@ -7,10 +7,10 @@ import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Typeface;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -65,10 +65,8 @@ public final class History {
 
     public void show(Activity activity) {
         Panel panel = new Panel(activity);
-        ScrollView scroll = new ScrollView(activity);
-        scroll.addView(panel);
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle("电池趋势").setView(scroll).setPositiveButton("关闭", null).create();
+        AlertDialog dialog = new CareDialog(activity)
+                .setTitle("电池趋势").setBody(panel).setPositiveButton("关闭", null).create();
         dialog.setOnDismissListener(d -> {
             synchronized (History.this) {
                 if (openPanel.get() == panel) openPanel.clear();
@@ -162,7 +160,8 @@ public final class History {
             this.text = text;
             this.grid = grid;
             this.stroke = stroke;
-            paint.setTextSize(dp(context, 10));
+            paint.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
+                    11, getResources().getDisplayMetrics()));
         }
 
         void update(List<Sample> rows, long start, long end) {
@@ -203,7 +202,7 @@ public final class History {
             float left = count == 0 ? 0 : dp(ctx, 8) + Math.max(
                     paint.measureText(number(high, metric)), paint.measureText(number(low, metric)));
             float right = getWidth() - dp(ctx, 5);
-            float top = dp(ctx, 11), bottom = getHeight() - dp(ctx, 20);
+            float top = Math.max(dp(ctx, 11), labelHeight), bottom = getHeight() - labelHeight - dp(ctx, 7);
             if (bottom <= top || right <= left) return;
             paint.setStrokeWidth(dp(ctx, 1));
             for (int tick = 0; tick <= 2; tick++) {

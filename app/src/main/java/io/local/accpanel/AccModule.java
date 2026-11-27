@@ -1,7 +1,6 @@
 package io.local.accpanel;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
@@ -36,7 +35,7 @@ final class AccModule {
                 + "内置版本 v2023.10.16（202310160）\n"
                 + "Copyright 2017–2023, VR25 · GPL-3.0-or-later\n"
                 + "许可证、可读源脚本与构建脚本均随 ZIP 分发。";
-        new AlertDialog.Builder(activity).setTitle("内置 ACC 模块")
+        new CareDialog(activity).setTitle("内置 ACC 模块")
                 .setMessage(text).setPositiveButton("导出模块 ZIP", (d, w) -> {
                     Intent create = new Intent(Intent.ACTION_CREATE_DOCUMENT)
                             .addCategory(Intent.CATEGORY_OPENABLE)
@@ -50,7 +49,7 @@ final class AccModule {
                     try {
                         activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(SOURCE)));
                     } catch (ActivityNotFoundException e) {
-                        new AlertDialog.Builder(activity).setMessage(SOURCE).setPositiveButton("完成", null).show();
+                        new CareDialog(activity).setMessage(SOURCE).setPositiveButton("完成", null).show();
                     }
                 }).setNegativeButton("关闭", null).show();
     }

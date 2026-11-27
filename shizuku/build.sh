@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Requirements: JDK 17, Android SDK platform 34 and build-tools 34.0.0, zip, openssl.
+# Requirements: JDK 17, Android SDK platform 37.2 and build-tools 37.0.0, zip, openssl.
 # Reuse ACC_SIGNING_DIR when rebuilding an update for an already-installed APK.
 set -euo pipefail
 export LC_ALL=C
@@ -10,13 +10,13 @@ build_dir="$project_dir/build"
 sdk_dir="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 if [[ -z "$sdk_dir" ]]; then
     for candidate in /opt/homebrew/share/android-commandlinetools "$HOME/Library/Android/sdk" "$HOME/Android/Sdk"; do
-        if [[ -d "$candidate" ]]; then sdk_dir="$candidate"; break; fi
+        if [[ -r "$candidate/platforms/android-37.2/android.jar" ]]; then sdk_dir="$candidate"; break; fi
     done
 fi
-android_jar="$sdk_dir/platforms/android-34/android.jar"
-tools_dir="$sdk_dir/build-tools/${ANDROID_BUILD_TOOLS_VERSION:-34.0.0}"
+android_jar="$sdk_dir/platforms/android-37.2/android.jar"
+tools_dir="$sdk_dir/build-tools/${ANDROID_BUILD_TOOLS_VERSION:-37.0.0}"
 if [[ ! -r "$android_jar" || ! -x "$tools_dir/d8" ]]; then
-    echo "Set ANDROID_HOME to an SDK containing platform 34 and build-tools 34.0.0." >&2
+    echo "Set ANDROID_HOME to an SDK containing platform 37.2 and build-tools 37.0.0." >&2
     exit 1
 fi
 if [[ ! -r "$source_dir/java/io/local/rootward/shizuku/MainActivity.java" ]]; then
@@ -65,7 +65,7 @@ fi
 actual=$(openssl dgst -sha256 "$annotation" | awk '{print $NF}')
 [[ "$actual" == 97dc45afefe3a1e421da42b8b6e9f90491477c45fc6178203e3a5e8a05ee8553 ]] || { echo "Digest mismatch: AndroidX annotations" >&2; exit 1; }
 jars+=("$annotation")
-"$tools_dir/aidl" "-p$sdk_dir/platforms/android-34/framework.aidl" "-I$source_dir/aidl" "-o$stage/gen" "$source_dir/aidl/io/local/rootward/shizuku/IBatteryReader.aidl"
+"$tools_dir/aidl" "-p$sdk_dir/platforms/android-37.2/framework.aidl" "-I$source_dir/aidl" "-o$stage/gen" "$source_dir/aidl/io/local/rootward/shizuku/IBatteryReader.aidl"
 classpath=$(IFS=:; echo "${jars[*]}")
 sources=()
 while IFS= read -r -d '' source_file; do sources+=("$source_file"); done \
@@ -111,5 +111,5 @@ fi
     --out "$stage/signed.apk" "$stage/aligned.apk"
 "$tools_dir/zipalign" -c 4 "$stage/signed.apk"
 "$tools_dir/apksigner" verify --verbose "$stage/signed.apk"
-mv -f "$stage/signed.apk" "$build_dir/Rootward-Shizuku-1.2.apk"
-echo "$build_dir/Rootward-Shizuku-1.2.apk"
+mv -f "$stage/signed.apk" "$build_dir/Rootward-Shizuku-1.3.apk"
+echo "$build_dir/Rootward-Shizuku-1.3.apk"

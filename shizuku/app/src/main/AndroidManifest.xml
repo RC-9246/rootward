@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.local.rootward.shizuku"
-    android:versionCode="3" android:versionName="1.2">
-    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34"/>
+    android:versionCode="4" android:versionName="1.3">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="37"/>
     <queries>
         <package android:name="moe.shizuku.privileged.api"/>
         <package android:name="org.lineageos.lineageparts"/>
@@ -11,6 +11,7 @@
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
@@ -22,7 +23,9 @@
             android:multiprocess="false"/>
         <provider android:name=".AutomationSignal" android:authorities="io.local.rootward.shizuku.automation"
             android:exported="true" android:grantUriPermissions="false"/>
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".MainActivity" android:exported="true"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
         <receiver android:name=".CareWidget" android:label="归根 · 电池养护" android:exported="false">

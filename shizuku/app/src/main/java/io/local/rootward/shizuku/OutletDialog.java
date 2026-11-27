@@ -28,7 +28,10 @@ final class OutletDialog {
               + "\n";
     message +=
         "只选择给这台手机充电的专用插座。归根按电量和温控请求供电，并核对 Home Assistant 上报的开关状态。手机离线或关机时若需保底通电，请在插座或家庭控制器设置超时。";
-    new AlertDialog.Builder(a)
+    final String description = message;
+    if (OutletNetwork.missing(a))
+      message += "\n局域网服务器需要允许「附近的设备」。公网 HTTPS 地址可直接使用。";
+    AlertDialog.Builder overview = new AlertDialog.Builder(a)
         .setTitle("Home Assistant 充电插座" + (active ? " · 已开启" : ""))
         .setMessage(message)
         .setNegativeButton("关闭", null)
@@ -102,8 +105,12 @@ final class OutletDialog {
                       })
                   .setNegativeButton("返回", (x, y) -> show(a, refresh))
                   .show();
-            })
-        .show();
+            });
+    if (OutletNetwork.missing(a))
+      overview.setNeutralButton("局域网权限", null);
+    AlertDialog dialog = overview.show();
+    OutletNetwork.bindPermissionButton(a, dialog,
+        () -> dialog.setMessage(description + "\n已允许访问局域网。"));
   }
 
   private static void configure(Activity a, Runnable refresh) {
@@ -121,14 +128,19 @@ final class OutletDialog {
     TextView status = new TextView(a);
     status.setText("建议使用单独的 Home Assistant 用户和令牌。连接验证只读取这个开关。");
     box.addView(status);
-    AlertDialog dlg =
+    AlertDialog.Builder setup =
         new AlertDialog.Builder(a)
             .setTitle("连接 Home Assistant")
-            .setView(box)
+            .setView(DisplayLayout.scrollForm(box))
             .setPositiveButton("验证并保存", null)
-            .setNegativeButton("取消", null)
-            .create();
-    dlg.show();
+            .setNegativeButton("取消", null);
+    if (OutletNetwork.missing(a)) {
+      setup.setNeutralButton("局域网权限", null);
+      status.append("\n连接家中服务器前请允许「附近的设备」。公网 HTTPS 地址可直接验证。");
+    }
+    AlertDialog dlg = setup.show();
+    OutletNetwork.bindPermissionButton(a, dlg,
+        () -> status.setText("已允许访问局域网，可验证连接。"));
     dlg.getButton(-1)
         .setOnClickListener(
             v -> {

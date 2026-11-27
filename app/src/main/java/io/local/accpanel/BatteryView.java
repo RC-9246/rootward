@@ -10,6 +10,8 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.os.Bundle;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -56,7 +58,8 @@ public final class BatteryView {
     private Button schedule;
     private TextView scheduleHint;
     private String latestTemp = "—";
-    private ScrollView dashboardPage, controlsPage;
+    private View dashboardPage, controlsPage;
+    private ScrollView shortWindowScroll;
     private Button dashboardTab, controlsTab, reload, diagnosticsButton, settingsButton, limitEntry;
     private boolean settingsExpanded;
     private Meter meter;
@@ -79,9 +82,11 @@ public final class BatteryView {
 
         LinearLayout shell = column();
         shell.setBackgroundColor(bg);
+        Configuration config = activity.getResources().getConfiguration();
+        boolean shortWindow = config.screenHeightDp < 460 || config.fontScale >= 1.5f && config.screenHeightDp < 700;
         LinearLayout top = column();
         top.setPadding(dp(18), dp(8), dp(18), dp(10));
-        LinearLayout header = row();
+        LinearLayout header = adaptiveRow(210);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.addView(label(activity.getString(R.string.app_name), 26, ink, true), weight());
         reload = actionButton("刷新", washed, accent);
@@ -95,6 +100,8 @@ public final class BatteryView {
         switcher.setBackground(shape(washed, 14, 0));
         dashboardTab = actionButton("仪表盘", washed, accent);
         controlsTab = actionButton("充电控制", washed, accent);
+        dashboardTab.setPadding(dp(4), dp(6), dp(4), dp(6));
+        controlsTab.setPadding(dp(4), dp(6), dp(4), dp(6));
         dashboardTab.setOnClickListener(v -> selectPage(false));
         controlsTab.setOnClickListener(v -> selectPage(true));
         switcher.addView(dashboardTab, weight());
@@ -110,7 +117,7 @@ public final class BatteryView {
         addElectrical(dashboard);
         gap(dashboard, 8);
         addFooter(dashboard);
-        dashboardPage = page(dashboard);
+        dashboardPage = page(dashboard, shortWindow);
         LinearLayout controls = column();
         addControls(controls);
         Button guide = actionButton("养护指南与初始设置", bg, accent);
@@ -120,20 +127,30 @@ public final class BatteryView {
         Button module = actionButton("内置 ACC 模块", bg, accent);
         module.setOnClickListener(v -> actions.bundledAcc());
         controls.addView(module, block());
-        controlsPage = page(controls);
-        shell.addView(dashboardPage, new LinearLayout.LayoutParams(MATCH, 0, 1));
-        shell.addView(controlsPage, new LinearLayout.LayoutParams(MATCH, 0, 1));
+        controlsPage = page(controls, shortWindow);
+        if (shortWindow) {
+            shell.addView(dashboardPage, block());
+            shell.addView(controlsPage, block());
+            shortWindowScroll = new ScrollView(activity);
+            shortWindowScroll.setBackgroundColor(bg);
+            shortWindowScroll.setFillViewport(true);
+            shortWindowScroll.addView(shell);
+        } else {
+            shell.addView(dashboardPage, new LinearLayout.LayoutParams(MATCH, 0, 1));
+            shell.addView(controlsPage, new LinearLayout.LayoutParams(MATCH, 0, 1));
+        }
         selectPage(false);
-        root = shell;
+        root = shortWindow ? shortWindowScroll : shell;
         render("—", "正在读取", "—", "—", "—", "—", "正在读取", "—", "—", false, true);
     }
 
-    private ScrollView page(LinearLayout content) {
+    private View page(LinearLayout content, boolean shortWindow) {
+        content.setPadding(dp(18), dp(2), dp(18), dp(20));
+        if (shortWindow) return content;
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
         scroll.setVerticalScrollBarEnabled(false);
-        content.setPadding(dp(18), dp(2), dp(18), dp(20));
         scroll.addView(content, new ScrollView.LayoutParams(MATCH, WRAP));
         return scroll;
     }
@@ -145,9 +162,39 @@ public final class BatteryView {
         styleTab(dashboardTab, !controls);
     }
 
+    private ScrollView activeScroll() {
+        if (shortWindowScroll != null) return shortWindowScroll;
+        return (ScrollView) (controlsPage.getVisibility() == View.VISIBLE ? controlsPage : dashboardPage);
+    }
+
+    void save(Bundle state) {
+        state.putBoolean("controls", controlsPage.getVisibility() == View.VISIBLE);
+        state.putBoolean("details", diagnostics.getVisibility() == View.VISIBLE);
+        state.putBoolean("settings", settingsExpanded);
+        state.putInt("scrollY", activeScroll().getScrollY());
+        chargeEditor.saveDraft(state, "chargeDraft");
+        temperatureEditor.saveDraft(state, "tempDraft");
+    }
+
+    void restore(Bundle state) {
+        if (state == null) return;
+        selectPage(state.getBoolean("controls"));
+        settingsExpanded = state.getBoolean("settings");
+        settingsButton.setText(settingsExpanded ? "收起完整设置" : "查看完整设置");
+        if (state.getBoolean("details")) {
+            diagnostics.setVisibility(View.VISIBLE);
+            diagnosticsButton.setText("收起诊断");
+        }
+        chargeEditor.pendingDraft = state.getIntArray("chargeDraft");
+        temperatureEditor.pendingDraft = state.getIntArray("tempDraft");
+        ScrollView scroll = activeScroll();
+        scroll.post(() -> scroll.scrollTo(0, state.getInt("scrollY")));
+    }
+
     private void openChargeControls() {
         selectPage(true);
-        controlsPage.post(() -> controlsPage.scrollTo(0, 0));
+        ScrollView active = activeScroll();
+        active.post(() -> active.scrollTo(0, 0));
     }
 
     private void styleTab(Button button, boolean selected) {
@@ -161,7 +208,7 @@ public final class BatteryView {
         LinearLayout hero = column();
         hero.setPadding(dp(20), dp(18), dp(20), dp(18));
         hero.setBackground(shape(HERO, 20, 0));
-        LinearLayout state = row();
+        LinearLayout state = adaptiveRow(175);
         state.setGravity(Gravity.CENTER_VERTICAL);
         state.addView(label("当前电量", 14, PALE, true), weight());
         charge = label("—", 13, Color.WHITE, true);
@@ -172,7 +219,7 @@ public final class BatteryView {
         percentage = label("—", 48, Color.WHITE, true);
         percentage.setIncludeFontPadding(false);
         percentage.setLetterSpacing(-0.025f);
-        LinearLayout reading = row();
+        LinearLayout reading = adaptiveRow(240);
         reading.setGravity(Gravity.CENTER_VERTICAL);
         reading.addView(percentage, weight());
         limitEntry = actionButton("上限  ›", 0xff285345, MINT);
@@ -187,7 +234,7 @@ public final class BatteryView {
         markLegend.setVisibility(View.GONE);
         hero.addView(markLegend, block());
         gap(hero, 6);
-        LinearLayout foot = row();
+        LinearLayout foot = adaptiveRow(190);
         foot.setGravity(Gravity.CENTER_VERTICAL);
         supply = label("—", 13, PALE, false);
         foot.addView(supply, weight());
@@ -200,7 +247,7 @@ public final class BatteryView {
 
     private void addVitals(LinearLayout body) {
         LinearLayout panel = card(14);
-        LinearLayout metrics = row();
+        LinearLayout metrics = adaptiveRow(246);
         metrics.setBaselineAligned(false);
         temp = metric(metrics, "电池温度");
         dividerBetween(metrics);
@@ -220,7 +267,7 @@ public final class BatteryView {
         flowText.setBackground(shape(washed, 10, 0));
         panel.addView(flowText, block());
         gap(panel, 12);
-        LinearLayout metrics = row();
+        LinearLayout metrics = adaptiveRow(220);
         metrics.setBaselineAligned(false);
         voltageValue = metric(metrics, "电池端电压");
         dividerBetween(metrics);
@@ -229,7 +276,7 @@ public final class BatteryView {
         body.addView(panel, block());
         gap(body, 12);
         LinearLayout explanation = card(16);
-        LinearLayout heading = row();
+        LinearLayout heading = adaptiveRow(225);
         heading.setGravity(Gravity.CENTER_VERTICAL);
         heading.addView(label("当前充电策略", 19, ink, true), weight());
         Button editPolicy = actionButton("调整策略", washed, accent);
@@ -343,6 +390,13 @@ public final class BatteryView {
         private final int presetLow, presetHigh;
         private int lower, upper;
         private Integer savedLower, savedUpper;
+        private int[] pendingDraft;
+
+        void saveDraft(Bundle bundle, String key) {
+            if (pendingDraft != null) bundle.putIntArray(key, pendingDraft);
+            else if (savedLower != null && savedUpper != null && hasChanges())
+                bundle.putIntArray(key, new int[]{savedLower, savedUpper, lower, upper});
+        }
         private final TextView lowValue, highValue, summary;
         private final SeekBar lowBar, highBar;
         private final Button commit, preset;
@@ -361,7 +415,7 @@ public final class BatteryView {
             summary = label("", 14, quiet, false);
             if (!thermal) panel.addView(summary, block());
             gap(panel, 4);
-            LinearLayout buttons = row();
+            LinearLayout buttons = adaptiveRow(240);
             preset = actionButton(presetLow + "–" + presetHigh + unit + " 预设", washed, accent);
             preset.setContentDescription("将待应用区间设为 " + presetLow + " 至 " + presetHigh + unit);
             preset.setOnClickListener(v -> setDraft(presetLow, presetHigh));
@@ -381,7 +435,7 @@ public final class BatteryView {
         }
 
         private TextView valueLine(LinearLayout panel, String title) {
-            LinearLayout row = row();
+            LinearLayout row = adaptiveRow(215);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.addView(label(title, 15, ink, true), weight());
             TextView number = label("—", 17, accent, true);
@@ -424,7 +478,11 @@ public final class BatteryView {
                     || upper > highBar.getMax()) return;
             savedLower = lower;
             savedUpper = upper;
-            setDraft(lower, upper);
+            if (pendingDraft != null && pendingDraft.length == 4
+                    && pendingDraft[0] == lower && pendingDraft[1] == upper) {
+                setDraft(pendingDraft[2], pendingDraft[3]);
+            } else setDraft(lower, upper);
+            pendingDraft = null;
         }
 
         private void setDraft(int lower, int upper) {
@@ -682,6 +740,9 @@ public final class BatteryView {
         button.setTextSize(14);
         button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         button.setAllCaps(false);
+        button.setSingleLine(false);
+        button.setMaxLines(Integer.MAX_VALUE);
+        button.setEllipsize(null);
         button.setMinWidth(0);
         button.setMinimumWidth(0);
         button.setMinHeight(dp(48));
@@ -717,6 +778,39 @@ public final class BatteryView {
         return layout;
     }
     private LinearLayout row() { return new LinearLayout(activity); }
+
+    // Measure the card's actual width, including in freeform windows or next to a cutout.
+    // Use the rendered size of a 14sp label so Android's nonlinear font scaling is respected.
+    private LinearLayout adaptiveRow(int minDp) {
+        return new LinearLayout(activity) {
+            private LinearLayout.LayoutParams[] horizontal;
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                float labelSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
+                        14, getResources().getDisplayMetrics());
+                boolean stack = MeasureSpec.getMode(widthSpec) != MeasureSpec.UNSPECIFIED
+                        && MeasureSpec.getSize(widthSpec) < minDp * labelSize / 14f;
+                int orientation = stack ? VERTICAL : HORIZONTAL;
+                if (getOrientation() != orientation) {
+                    if (horizontal == null) {
+                        horizontal = new LinearLayout.LayoutParams[getChildCount()];
+                        for (int i = 0; i < horizontal.length; i++)
+                            horizontal[i] = new LinearLayout.LayoutParams((LinearLayout.LayoutParams) getChildAt(i).getLayoutParams());
+                    }
+                    setOrientation(orientation);
+                    for (int i = 0; i < horizontal.length; i++) {
+                        View child = getChildAt(i);
+                        boolean divider = child.getClass() == View.class;
+                        LinearLayout.LayoutParams layout = stack
+                                ? new LinearLayout.LayoutParams(MATCH, divider ? dp(1) : WRAP)
+                                : new LinearLayout.LayoutParams(horizontal[i]);
+                        if (stack && i > 0) layout.topMargin = dp(6);
+                        child.setLayoutParams(layout);
+                    }
+                }
+                super.onMeasure(widthSpec, heightSpec);
+            }
+        };
+    }
     private void gap(LinearLayout column, int size) {
         column.addView(new View(activity), new LinearLayout.LayoutParams(1, dp(size)));
     }

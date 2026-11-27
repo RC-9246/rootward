@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.text.InputType;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
 final class NativeLimitsDialog {
   static void open(Activity activity, ShellLink shell) {
@@ -66,7 +67,9 @@ final class NativeLimitsDialog {
           if ((writable & undoSide) != 0) {
             android.widget.Button restore = new android.widget.Button(a);
             restore.setText("撤销上一次修改");
-            b.setView(restore);
+            LinearLayout body = details(a, msg);
+            body.addView(restore);
+            b.setMessage(null).setView(DisplayLayout.scrollForm(body));
             AlertDialog info = b.show();
             restore.setOnClickListener(
                 v -> {
@@ -89,6 +92,18 @@ final class NativeLimitsDialog {
         });
   }
 
+  private static LinearLayout details(Activity activity, String message) {
+    LinearLayout body = new LinearLayout(activity);
+    body.setOrientation(LinearLayout.VERTICAL);
+    int pad = Math.round(22 * activity.getResources().getDisplayMetrics().density);
+    body.setPadding(pad, 0, pad, 0);
+    TextView description = new TextView(activity);
+    description.setTextAppearance(android.R.style.TextAppearance_Material_Body1);
+    description.setText(message);
+    body.addView(description);
+    return body;
+  }
+
   private static String display(int number) {
     if (number == NativeLimits.MISSING) return "未提供";
     if (number < 0) return "无法读取";
@@ -107,15 +122,12 @@ final class NativeLimitsDialog {
     input.setSingleLine(true);
     input.setText(Integer.toString(old));
     input.selectAll();
-    LinearLayout body = new LinearLayout(a);
-    int pad = (int) (22 * a.getResources().getDisplayMetrics().density);
-    body.setPadding(pad, 0, pad, 0);
+    LinearLayout body = details(a, "当前值 " + old + "%。输入 " + min + "–" + max + "%，驱动可能取整。");
     body.addView(input, new LinearLayout.LayoutParams(-1, -2));
     AlertDialog dialog =
         new AlertDialog.Builder(a)
             .setTitle("更改系统" + endpoint)
-            .setMessage("当前值 " + old + "%。输入 " + min + "–" + max + "%，驱动可能取整。")
-            .setView(body)
+            .setView(DisplayLayout.scrollForm(body))
             .setPositiveButton("写入并回读", null)
             .setNegativeButton("取消", null)
             .create();

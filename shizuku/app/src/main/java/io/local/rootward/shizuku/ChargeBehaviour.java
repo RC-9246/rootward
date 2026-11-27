@@ -28,12 +28,18 @@ final class ChargeBehaviour {
       ALREADY_HELD = 7;
 
   private static final Path SUPPLIES = Paths.get("/sys/class/power_supply");
-  private static final String[] BATTERIES = {"battery", "Battery", "BAT0"};
   private static final String NORMAL = "auto", HOLD = "inhibit-charge";
 
   // The Binder endpoint supplies the UserService's actual process UID and a numeric operation.
-  static synchronized int run(int uid, int action) {
-    return apply(uid, action, SUPPLIES, ChargeBehaviour::submit);
+  static final class Result {
+    String id = "";
+    int mode = UNAVAILABLE;
+  }
+
+  static synchronized Result operate(int uid, String expected, int action) {
+    Result r = new Result();
+    r.mode = mode(uid, action, SUPPLIES, ChargeBehaviour::submit, expected, r);
+    return r;
   }
 
   interface ModeWriter {
@@ -42,37 +48,43 @@ final class ChargeBehaviour {
 
   // The injectable root and driver write allow the same checks to run against a fake sysfs.
   static int apply(int uid, int action, Path supplies, ModeWriter writer) {
+    Result r = new Result();
+    return mode(uid, action, supplies, writer, null, r);
+  }
+
+  static int mode(
+      int uid, int action, Path supplies, ModeWriter writer, String expected, Result r) {
     if (uid != 2000) return DENIED;
     if (action != PROBE && action != PAUSE && action != RESUME && action != ACQUIRE) return INVALID;
     try {
-      for (String name : BATTERIES) {
-        Path supply = supplies.resolve(name);
-        Path node = supply.resolve("charge_behaviour");
-        try {
-          if (!"Battery".equals(read(supply.resolve("type")))) continue;
-          if (!Files.readAttributes(node, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS)
-              .isRegularFile()) continue;
-        } catch (NoSuchFileException absent) {
-          continue;
-        }
-        int current = parse(read(node));
-        if (current == UNAVAILABLE) return UNAVAILABLE;
+      Path supply = SystemBattery.select(supplies);
+      if (supply == null) return UNAVAILABLE;
+      Path device = supply.toRealPath();
+      r.id = SystemBattery.identity(device);
+      if (r.id.isEmpty()) return UNCONFIRMED;
+      if (action != PROBE && expected != null && !r.id.equals(expected)) return UNCONFIRMED;
+      Path node = device.resolve("charge_behaviour");
+      if (!Files.readAttributes(node, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS)
+          .isRegularFile()) return UNAVAILABLE;
+      int current = parse(read(node));
+      if (current == UNAVAILABLE) return UNAVAILABLE;
 
-        // Opening without CREATE or TRUNCATE checks the shell's real open permission.
-        // A probe never submits a value to the driver.
-        try (OutputStream ignored = Files.newOutputStream(node, StandardOpenOption.WRITE)) {}
-        if (action == PROBE || current == EXTERNAL) return current;
-        if (action == ACQUIRE && current == INHIBITED) return ALREADY_HELD;
-        int target = action == RESUME ? AUTO : INHIBITED;
-        if (current == target) return current;
-        try {
-          writer.write(node, target == INHIBITED);
-          return parse(read(node)) == target ? target : UNCONFIRMED;
-        } catch (IOException | SecurityException lostAcknowledgement) {
-          // Once submitted, even a read permission failure cannot prove the write was ignored.
-          return UNCONFIRMED;
-        }
+      // Opening without CREATE or TRUNCATE checks the shell's real open permission.
+      // A probe never submits a value to the driver.
+      try (OutputStream ignored = Files.newOutputStream(node, StandardOpenOption.WRITE)) {}
+      if (action == PROBE || current == EXTERNAL) return current;
+      if (action == ACQUIRE && current == INHIBITED) return ALREADY_HELD;
+      int target = action == RESUME ? AUTO : INHIBITED;
+      if (current == target) return current;
+      try {
+        if (!r.id.equals(SystemBattery.identity(device))) return UNCONFIRMED;
+        writer.write(node, target == INHIBITED);
+        return parse(read(node)) == target ? target : UNCONFIRMED;
+      } catch (IOException | SecurityException lostAcknowledgement) {
+        // Once submitted, even a read permission failure cannot prove the write was ignored.
+        return UNCONFIRMED;
       }
+    } catch (NoSuchFileException | SystemBattery.Ambiguous unavailable) {
       return UNAVAILABLE;
     } catch (AccessDeniedException | SecurityException denied) {
       return DENIED;

@@ -14,7 +14,8 @@ printf '60\n' > "$fixture/hardware/battery/capacity"
 printf 'battCapacity=battery/capacity\n' > "$fixture/runtime/.batt-interface.sh"
 printf '/data/adb/vr25/acc/accd.sh\000' > "$fixture/cmdline"
 printf '%s\n' "$$" > "$fixture/runtime/acc.lock"
-echo "$$" > "$dir/loaded-pid"; chmod 600 "$dir/loaded-pid"
+old_stamp=${3:-loaded-pid}
+echo "$$" > "$dir/$old_stamp"; chmod 600 "$dir/$old_stamp"
 touch "$dir/holding" "$dir/enabled"
 cp "$old" "$plugin"; chmod 600 "$plugin"
 # The real package uses root-owned resources; emulate ownership in this fixture.
@@ -36,7 +37,7 @@ test_acc() {
       echo restart >> "$fixture/restarts"
       if cmp -s "$plugin" "$old"; then return 0; fi
       [ ! -f "$fixture/fail-upgrade" ] || return 1
-      echo "$$" > "$dir/loaded-v2-pid"; chmod 600 "$dir/loaded-v2-pid";;
+      echo "$$" > "$dir/loaded-v3-pid"; chmod 600 "$dir/loaded-v3-pid";;
     *) return 2;;
   esac
 }
@@ -61,7 +62,12 @@ if cmp -s "$old" "$plugin"; then exit 1; fi
 (. "$commands/cancel")
 [ ! -e "$dir/resume-once" ]
 [ -f "$dir/holding" ]
+(. "$commands/schedule")
+(. "$commands/snapshot") | grep -Eq '^@scheduled_at=[0-9]{10}$'
+if (. "$commands/schedule" >/dev/null); then exit 1; fi
+(. "$commands/cancelSchedule")
+(. "$commands/snapshot") | grep -qx '@scheduled_at=0'
 rm "$dir/enabled"
 if (. "$commands/resume" >/dev/null); then exit 1; fi
 [ ! -e "$dir/enabled" ]
-echo 'PASS: verified v1 migration, rollback, ownership checks and cancellation'
+echo 'PASS: verified legacy migration, rollback, ownership checks and cancellation'

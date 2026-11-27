@@ -12,7 +12,6 @@ import android.os.Looper;
 import android.os.RemoteException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import moe.shizuku.server.IShizukuService;
 import rikka.shizuku.Shizuku;
 
 /** Foreground diagnostic and explicit manual actions on a verified ADB UserService session. */
@@ -32,6 +31,7 @@ final class ShellLink {
   private ServiceConnection connection;
   private boolean binding, closed, busy;
   private String report, message;
+  private String observedBattery = "";
   private int observed = ChargeBehaviour.UNAVAILABLE;
   private volatile int session;
 
@@ -70,7 +70,7 @@ final class ShellLink {
     args =
         new Shizuku.UserServiceArgs(new ComponentName(activity, BatteryReader.class))
             .tag("rootward-diagnostics")
-            .version(2)
+            .version(3)
             .daemon(false)
             .processNameSuffix("battery_reader");
   }
@@ -82,24 +82,12 @@ final class ShellLink {
     refresh();
   }
 
-  private static boolean allowed() {
-    // The client helper caches granted permission. Ask the same server API directly so a
-    // long-lived diagnostic Binder cannot outlive permission revocation.
-    IBinder gateway = Shizuku.getBinder();
-    if (gateway == null) return false;
-    try {
-      return IShizukuService.Stub.asInterface(gateway).checkSelfPermission();
-    } catch (RemoteException e) {
-      return false;
-    }
-  }
-
   private static boolean live(IBinder gateway, IBatteryReader service) {
     try {
       return gateway != null
           && Shizuku.getBinder() == gateway
           && gateway.pingBinder()
-          && allowed()
+          && ObserverApp.shellPermission()
           && Shizuku.getUid() == 2000
           && service != null
           && service.asBinder().pingBinder();
@@ -151,7 +139,7 @@ final class ShellLink {
         view.show("需要支持授权请求和用户服务的 Shizuku。请更新管理器。", "检查连接", true);
         return;
       }
-      if (!allowed()) {
+      if (!ObserverApp.shellPermission()) {
         if (server != null) release();
         view.show(message != null ? message : "授权后可读取驱动与 USB 测点，检查此机型是否支持充电控制。", "授权并读取驱动", true);
         return;
@@ -181,7 +169,7 @@ final class ShellLink {
         refresh();
         return;
       }
-      if (!allowed()) {
+      if (!ObserverApp.shellPermission()) {
         Shizuku.requestPermission(400);
         return;
       }
@@ -196,7 +184,7 @@ final class ShellLink {
   private void start() {
     if (closed || binding || busy) return;
     try {
-      if (!Shizuku.pingBinder() || !allowed() || Shizuku.getUid() != 2000) {
+      if (!Shizuku.pingBinder() || !ObserverApp.shellPermission() || Shizuku.getUid() != 2000) {
         refresh();
         return;
       }
@@ -242,6 +230,70 @@ final class ShellLink {
     refresh();
   }
 
+  interface LimitsResult {
+    void accept(android.os.Bundle result);
+  }
+
+  void nativeLimit(
+      android.os.Bundle before, int side, int value, boolean undo, LimitsResult callback) {
+    final int generation = session;
+    final IBinder gateway = server;
+    final IBatteryReader target = reader;
+    final boolean change = side != NativeLimits.READ;
+    final long deadline = android.os.SystemClock.elapsedRealtime() + 15000;
+    if (closed
+        || busy
+        || !live(gateway, target)
+        || (change
+            && (before.getInt("session", -1) != generation || prefs.getBoolean("cruise", false)))) {
+      callback.accept(null);
+      return;
+    }
+    busy = true;
+    refresh();
+    worker.execute(
+        () -> {
+          android.os.Bundle result = null;
+          try {
+            result =
+                NativeLimitJournal.transact(
+                    context,
+                    before,
+                    side,
+                    value,
+                    undo,
+                    (endpoint, percent) -> {
+                      if (generation != session
+                          || !live(gateway, target)
+                          || (endpoint != NativeLimits.READ && prefs.getBoolean("cruise", false)))
+                        throw new RemoteException();
+                      return target.nativeLimit(
+                          before.getString("id", ""),
+                          before.getInt("start", -1),
+                          before.getInt("end", -1),
+                          endpoint,
+                          percent,
+                          deadline);
+                    });
+          } catch (RemoteException | RuntimeException ignored) {
+            // Report missing acknowledgement even when the driver might have accepted the change.
+          }
+          final android.os.Bundle answer = result;
+          main.post(
+              () -> {
+                if (closed) return;
+                if (generation != session) {
+                  callback.accept(null);
+                  return;
+                }
+                busy = false;
+                refresh();
+                if (answer != null) answer.putInt("session", generation);
+                callback.accept(live(gateway, target) ? answer : null);
+              });
+        });
+  }
+
   void setPaused(boolean pause) {
     if (!canWrite()) {
       refresh();
@@ -255,6 +307,7 @@ final class ShellLink {
     final IBinder gateway = server;
     final int generation = session;
     final int expected = observed;
+    final String expectedBattery = observedBattery;
     busy = true;
     observed = ChargeBehaviour.UNAVAILABLE;
     message = action == ChargeBehaviour.PROBE ? "正在读取驱动…" : "正在核对驱动并回读操作结果…";
@@ -264,18 +317,21 @@ final class ShellLink {
           try {
             if (generation != session || !live(gateway, target)) throw new RemoteException();
             String snapshot = action == ChargeBehaviour.PROBE ? target.readSnapshot() : null;
-            int result = target.chargeBehaviour(ChargeBehaviour.PROBE);
+            android.os.Bundle readMode = target.chargeMode("", ChargeBehaviour.PROBE);
+            String battery = readMode.getString("id", "");
+            int result = readMode.getInt("mode", ChargeBehaviour.UNCONFIRMED);
             String note = null;
             boolean resumed = false;
             if (action != ChargeBehaviour.PROBE) {
-              if (result != expected) {
+              if (result != expected || !battery.equals(expectedBattery)) {
                 note = "驱动状态已变化，请核对后再操作。";
               } else if (prefs.getBoolean("cruise", false)) {
                 note = "巡航已接管驱动，请关闭巡航后手动操作。";
               } else {
                 if (generation != session || !live(gateway, target)) throw new RemoteException();
                 // The UserService checks its process UID and reads the node back after each write.
-                result = target.chargeBehaviour(action);
+                result =
+                    target.chargeMode(battery, action).getInt("mode", ChargeBehaviour.UNCONFIRMED);
                 resumed = action == ChargeBehaviour.RESUME && result == ChargeBehaviour.AUTO;
               }
             }
@@ -291,6 +347,7 @@ final class ShellLink {
                   }
                   busy = false;
                   observed = actual;
+                  observedBattery = battery;
                   if (snapshot != null) report = snapshot;
                   message = (notice == null ? "" : notice + " ") + describe(actual);
                   if (!prefs.getBoolean("cruise", false)

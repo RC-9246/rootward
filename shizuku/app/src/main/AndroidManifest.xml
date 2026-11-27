@@ -1,9 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.local.rootward.shizuku"
-    android:versionCode="1" android:versionName="1.0">
+    android:versionCode="2" android:versionName="1.1">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34"/>
-    <queries><package android:name="moe.shizuku.privileged.api"/></queries>
+    <queries>
+        <package android:name="moe.shizuku.privileged.api"/>
+        <package android:name="org.lineageos.lineageparts"/>
+    </queries>
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <application android:name=".ObserverApp" android:label="@string/app_name" android:theme="@style/Theme"
@@ -12,9 +16,17 @@
         <provider android:name="rikka.shizuku.ShizukuProvider" android:authorities="io.local.rootward.shizuku.shizuku"
             android:exported="true" android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"
             android:multiprocess="false"/>
+        <provider android:name=".AutomationSignal" android:authorities="io.local.rootward.shizuku.automation"
+            android:exported="true" android:grantUriPermissions="false"/>
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
+        <receiver android:name=".RestoreWatch" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
         <service android:name=".WatchService" android:foregroundServiceType="specialUse" android:exported="false">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started local battery monitoring with visible charge and temperature reminders"/>
         </service>

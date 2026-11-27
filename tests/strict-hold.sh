@@ -56,7 +56,7 @@ if [ -n "${3:-}" ]; then
   done
 fi
 hold="$dataDir/rootward-hold/holding"
-loaded="$dataDir/rootward-hold/loaded-v2-pid"
+loaded="$dataDir/rootward-hold/loaded-v3-pid"
 # Guard against ACC CLI, an unrelated process and a different module revision.
 (unset -f _ge_pause_cap; . "$plugin"; no_ command -v rootward_original_pause)
 echo 111111 > "$TMPDIR/acc.lock"
@@ -82,6 +82,8 @@ restart_at_midpoint() {
 set -eu
 execDir="$2/module"; dataDir="$2/data"; TMPDIR="$2/runtime"
 config="$dataDir/config.txt"; battCapacity="$2/capacity"
+temp="$2/temp"
+if [ -n "${4:-}" ]; then clock_after_restart=$4; date() { echo "$clock_after_restart"; }; fi
 echo "$$" > "$TMPDIR/acc.lock"
 stat() { echo 0:0:700; }
 src_cfg() { . "$config"; }
@@ -90,10 +92,10 @@ _le_resume_cap() { [ "$(cat "$battCapacity")" -le "${capacity[2]}" ]; }
 . "$1"
 isAccd=true
 src_cfg
-[ "$(cat "$dataDir/rootward-hold/loaded-v2-pid")" = "$$" ]
+[ "$(cat "$dataDir/rootward-hold/loaded-v3-pid")" = "$$" ]
 if _ge_pause_cap; then [ "$3" = holding ]; else [ "$3" = open ]; fi
 [ "$offMid" = false ]
-' restart "$plugin" "$scratch" "$1"
+' restart "$plugin" "$scratch" "$1" "${2:-}"
   echo "$$" > "$TMPDIR/acc.lock"
 }
 read_soc 60
@@ -151,6 +153,28 @@ read_soc 68
 no_ test -e "$once"
 yes_ _ge_pause_cap
 echo 'capacity=(5 50 50 75 false false)' >> "$config"
+read_soc 61
+
+# Scheduled windows use wall time across daemon restarts, stay bounded when the
+# cable/temperature prevents charging, and are invalidated by threshold changes.
+(
+  clock=1900000000
+  date() { [ "$1" = +%s ] && echo "$clock" || command date "$@"; }
+  plan="$rootward_dir/plan-1900000010-50-75.fixture"
+  temp="$scratch/temp"; echo 310 > "$temp"; touch "$plan"
+  no_ _le_resume_cap
+  clock=1900000010; yes_ _le_resume_cap; no_ _ge_pause_cap
+  restart_at_midpoint open "$clock"
+  read_soc 61; yes_ _le_resume_cap  # replug
+  echo 500 > "$temp"; no_ _le_resume_cap
+  echo unknown > "$temp"; no_ _le_resume_cap
+  (temp="$TMPDIR/.dummy-temp"; echo 250 > "$temp"; no_ _le_resume_cap)
+  echo 360 > "$temp"; yes_ _le_resume_cap
+  clock=1900003610; no_ _le_resume_cap; no_ test -e "$plan"; yes_ _ge_pause_cap
+  touch "$plan"; clock=1900000010; read_soc 75; no_ test -e "$plan"
+  read_soc 61; touch "$plan"; read_soc 50; no_ test -e "$plan"; yes_ _le_resume_cap
+  read_soc 75; read_soc 61; touch "$plan"; capacity[3]=76; no_ _le_resume_cap; no_ test -e "$plan"
+)
 read_soc 61
 
 if [ -n "${3:-}" ]; then

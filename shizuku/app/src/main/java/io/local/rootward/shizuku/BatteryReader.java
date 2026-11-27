@@ -10,8 +10,41 @@ import java.nio.charset.StandardCharsets;
 /** Fixed battery operations hosted in a Shizuku UserService. */
 public final class BatteryReader extends IBatteryReader.Stub {
   @Override
-  public int chargeBehaviour(int action) {
-    return ChargeBehaviour.run(Process.myUid(), action);
+  public android.os.Bundle nativeLimit(
+      String id, int low, int high, int side, int value, long expires) {
+    NativeLimits.State s =
+        NativeLimits.run(
+            Process.myUid(),
+            java.nio.file.Paths.get("/sys/class/power_supply"),
+            id,
+            low,
+            high,
+            side,
+            value,
+            (node, level) -> {
+              long remaining = expires - android.os.SystemClock.elapsedRealtime();
+              if (remaining <= 0 || remaining > 15000) throw new IOException("request expired");
+              NativeLimits.submit(node, level);
+            });
+    android.os.Bundle b = new android.os.Bundle();
+    b.putString("id", s.id);
+    b.putString("name", s.name);
+    b.putInt("start", s.start);
+    b.putInt("end", s.end);
+    b.putInt("writable", s.writable);
+    b.putBoolean("confirmedChange", s.confirmedChange);
+    b.putString("note", s.note);
+    return b;
+  }
+
+  @Override
+  public android.os.Bundle chargeMode(String expectedId, int action) {
+    ChargeBehaviour.Result r =
+        ChargeBehaviour.operate(Process.myUid(), expectedId == null ? "" : expectedId, action);
+    android.os.Bundle result = new android.os.Bundle();
+    result.putString("id", r.id);
+    result.putInt("mode", r.mode);
+    return result;
   }
 
   @Override

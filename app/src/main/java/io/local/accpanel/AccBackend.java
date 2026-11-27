@@ -32,6 +32,13 @@ public final class AccBackend {
             + "\"$acc\" -sp '" + SELECT + "' || exit $?\n"
             + StrictHold.SNAPSHOT
             + "cd /sys/class/power_supply || exit 0\n"
+            + "iface=/dev/.vr25/acc/.batt-interface.sh\n"
+            + "if [ -r \"$iface\" ]; then while IFS='=' read -r key node; do\n"
+            + "  case \"$node\" in */*) ;; *) continue;; esac\n"
+            + "  case \"$key:${node#*/}\" in battCapacity:capacity|battStatus:status|temp:temp|temp:batt_temp) ;; *) continue;; esac\n"
+            + "  case \"${node%%/*}\" in ''|.|..|*[!a-zA-Z0-9_.:-]*) continue;; esac\n"
+            + "  if [ -r \"$node\" ] && IFS= read -r value < \"$node\"; then printf '\\n@driver/%s=%s\\n' \"$key\" \"$value\"; fi\n"
+            + "done < \"$iface\"; fi\n"
             + "for node in usb/online battery/cycle_count bms/cycle_count; do\n"
             + "  if [ -r \"$node\" ]; then printf '\\n@%s=%s\\n' \"$node\" "
             + "\"$(cat \"$node\" 2>/dev/null)\"; fi\n"
@@ -50,10 +57,12 @@ public final class AccBackend {
         public final boolean holding, holdLoaded;
         /** Persisted permission to top up to the previously approved upper threshold once. */
         public final boolean manualResume;
+        public final long scheduledAt;
         public final boolean resumeOverridesCapacity;
         public final String version, daemon, settings, details;
         /** Hardware readings taken at snapshotMillis, independent of Android's battery broadcasts. */
-        public final Integer usbOnline, cycleCount;
+        public final Integer usbOnline, cycleCount, driverLevel, driverTempTenths;
+        public final String driverStatus;
         public final long snapshotMillis;
         private final Map<String, String> fields;
 
@@ -74,12 +83,28 @@ public final class AccBackend {
                 if (equals < 1) continue;
                 String key = line.substring(0, equals).trim();
                 String value = line.substring(equals + 1).trim();
+                if (fields.containsKey(key) && key.startsWith("@driver/")) {
+                    // A conflicting optional sensor cannot invalidate the ACC configuration.
+                    fields.put(key, "");
+                    continue;
+                }
                 if (fields.put(key, value) != null) throw new IOException("ACC 返回了重复字段 " + key);
                 if (!key.startsWith("@")) report.append(key).append('=').append(value).append('\n');
             }
             snapshotMillis = System.currentTimeMillis();
             String online = fields.get("@usb/online");
             usbOnline = "1".equals(online) || "0".equals(online) ? Integer.valueOf(online) : null;
+            driverLevel = reading("@driver/battCapacity", 0, 100);
+            driverTempTenths = reading("@driver/temp", -600, 1500);
+            String raw = fields.get("@driver/battStatus");
+            switch (raw == null ? "" : raw) {
+                case "Charging": driverStatus = "充电中"; break;
+                case "Discharging": driverStatus = "放电中"; break;
+                case "Not charging": driverStatus = "未充电"; break;
+                case "Full": driverStatus = "已满"; break;
+                case "Idle": driverStatus = "Idle（空闲）"; break;
+                default: driverStatus = null;
+            }
             Integer batteryCount = optionalCount("@battery/cycle_count");
             Integer bmsCount = optionalCount("@bms/cycle_count");
             // Some kernels expose a permanent zero or two disagreeing counters. Bin arrays
@@ -102,6 +127,9 @@ public final class AccBackend {
             cableHold = "true".equals(holdSetting) ? Boolean.TRUE
                     : StrictHold.VERSION.equals(version) && "false".equals(holdSetting) ? Boolean.FALSE : null;
             manualResume = Boolean.TRUE.equals(cableHold) && "true".equals(fields.get("@manual_resume"));
+            String at = fields.get("@scheduled_at");
+            scheduledAt = Boolean.TRUE.equals(cableHold) && at != null && at.matches("[0-9]{10}")
+                    ? Long.parseLong(at) : 0;
             holding = !manualResume && Boolean.TRUE.equals(cableHold) && "true".equals(fields.get("@hold_phase"));
             holdLoaded = StrictHold.VERSION.equals(version) && "运行中".equals(daemon)
                     && "true".equals(fields.get("@hold_loaded"));
@@ -112,6 +140,13 @@ public final class AccBackend {
         private Integer optionalCount(String key) {
             String value = fields.get(key);
             return value != null && value.matches("[0-9]{1,6}") ? Integer.valueOf(value) : null;
+        }
+
+        private Integer reading(String key, int min, int max) {
+            String raw = fields.get(key);
+            if (raw == null || !raw.matches("-?[0-9]{1,5}")) return null;
+            int value = Integer.parseInt(raw);
+            return value >= min && value <= max ? value : null;
         }
 
         private int number(String key) throws IOException {
@@ -126,6 +161,17 @@ public final class AccBackend {
 
     public static synchronized State read() throws Exception {
         return snapshot("");
+    }
+
+    public static synchronized State startDaemon() throws Exception {
+        State saved = snapshot(writeDeadline()
+                + "\"$acc\" -D >/dev/null 2>&1; rc=$?\n"
+                + "case $rc in 0) ;; 9) \"$acc\" -D start </dev/null >/dev/null 2>&1; rc=$?\n"
+                + "  case $rc in 0|8) ;; *) echo 'ACC 启动失败'; exit $rc;; esac\n"
+                + "  for attempt in 1 2 3 4 5; do \"$acc\" -D >/dev/null 2>&1 && break; sleep 1; done;;\n"
+                + "  *) echo '无法确认 ACC 的运行状态'; exit $rc;; esac\n");
+        if (!"运行中".equals(saved.daemon)) throw new IOException("已请求启动，尚未读到运行中的 ACC。");
+        return saved;
     }
 
     public static synchronized State apply(int lower, int upper) throws Exception {
@@ -195,8 +241,15 @@ public final class AccBackend {
         return saved;
     }
 
+    public static synchronized State schedule(long seconds, String pluginBody) throws Exception {
+        State saved = snapshot(writeDeadline() + StrictHold.scheduleCommand(seconds, pluginBody));
+        if (saved.scheduledAt != seconds) throw mismatch();
+        return saved;
+    }
+
     private static State write(String fields) throws Exception {
-        return snapshot(writeDeadline() + "\"$acc\" -s " + fields + " || exit $?\n");
+        return snapshot(writeDeadline() + "\"$acc\" -D >/dev/null 2>&1 || { echo 'ACC 未运行，无法应用本次设置。'; exit 83; }\n"
+                + "\"$acc\" -s " + fields + " || exit $?\n");
     }
 
     private static String writeDeadline() {

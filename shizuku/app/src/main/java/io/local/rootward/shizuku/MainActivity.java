@@ -30,6 +30,8 @@ public final class MainActivity extends Activity {
   private Switch manual, cruise;
   private Graph graph;
   private Archive archive;
+  private long lastChartRefresh = -60000;
+  private int chartUpper = -1, chartHeat = -1;
   private ShellLink shell;
   private final Handler h = new Handler(Looper.getMainLooper());
   private final ExecutorService files = Executors.newSingleThreadExecutor();
@@ -116,6 +118,17 @@ public final class MainActivity extends Activity {
         "打开系统电池设置",
         v -> {
           try {
+            Intent lineage = new Intent("org.lineageos.lineageparts.CHARGING_CONTROL_SETTINGS")
+                .setPackage("org.lineageos.lineageparts");
+            if (getPackageManager().resolveActivity(lineage, PackageManager.MATCH_SYSTEM_ONLY
+                    | PackageManager.MATCH_DEFAULT_ONLY) != null) {
+              startActivity(lineage);
+              return;
+            }
+          } catch (ActivityNotFoundException | SecurityException ignored) {
+            // The settings package may change while the app is open.
+          }
+          try {
             startActivity(new Intent(Intent.ACTION_POWER_USAGE_SUMMARY));
           } catch (ActivityNotFoundException e) {
             startActivity(new Intent(Settings.ACTION_SETTINGS));
@@ -140,6 +153,7 @@ public final class MainActivity extends Activity {
     cruise.setOnClickListener(v -> toggleCruise());
     pauseDriver = btn(hw, "手动暂停充电", v -> shell.setPaused(true));
     resumeDriver = btn(hw, "恢复系统自动充电", v -> shell.setPaused(false));
+    btn(hw, "查看系统原生限充", v -> NativeLimitsDialog.open(this, shell));
     LinearLayout sh = card(root, "Shizuku 驱动诊断", WHITE);
     shizStatus = text(sh, "", 15, INK, false);
     shizStatus.setTextIsSelectable(true);
@@ -154,6 +168,7 @@ public final class MainActivity extends Activity {
         });
     LinearLayout history = card(root, "本机记录", WHITE);
     summary = text(history, "", 15, INK, false);
+    btn(history, "查看养护历史与接电记录", v -> historyReport());
     text(history, "最近 1 小时电量 · 0–100%", 13, INK, false);
     graph = new Graph();
     history.addView(graph, new LinearLayout.LayoutParams(-1, px(75)));
@@ -172,6 +187,7 @@ public final class MainActivity extends Activity {
             msg("没有可用的文件选择器");
           }
         });
+    btn(history, "连接本机自动化应用", v -> automationSettings());
     shell =
         new ShellLink(
             this,
@@ -210,7 +226,7 @@ public final class MainActivity extends Activity {
   @Override
   protected void onDestroy() {
     shell.close();
-    archive.close();
+    files.execute(archive::close);
     files.shutdown();
     super.onDestroy();
   }
@@ -286,9 +302,23 @@ public final class MainActivity extends Activity {
             && r.level < hi
             && (p == ChargePhase.WAIT || p == ChargePhase.MANUAL));
     renderHardware();
-    summary.setText(archive.summary(hi, hot));
-    graph.data = archive.recentLevels();
-    graph.invalidate();
+    long now = SystemClock.elapsedRealtime();
+    if (now - lastChartRefresh >= 60000 || hi != chartUpper || hot != chartHeat) {
+      chartUpper = hi;
+      chartHeat = hot;
+      lastChartRefresh = now;
+      files.execute(() -> {
+        UsageWindow report = archive.window(1, hi, hot);
+        ArrayList<PointF> points = archive.recentLevels();
+        runOnUiThread(() -> {
+          if (isDestroyed() || isFinishing() || chartUpper != hi || chartHeat != hot) return;
+          summary.setText("近 24 小时已记录 " + UsageWindow.duration(report.covered)
+              + "，高电量与高温重叠 " + UsageWindow.duration(report.overlap));
+          graph.data = points;
+          graph.invalidate();
+        });
+      });
+    }
   }
 
   private void renderHardware() {
@@ -374,6 +404,53 @@ public final class MainActivity extends Activity {
     } catch (RuntimeException e) {
       msg("系统未允许刷新记录服务");
     }
+  }
+
+  private void historyReport() {
+    new AlertDialog.Builder(this).setTitle("选择记录范围")
+        .setItems(new String[]{"近 24 小时", "近 7 天", "近 30 天"}, (dialog, index) -> {
+          int days = new int[]{1, 7, 30}[index];
+          int hi = prefs.getInt("high", 75), hot = prefs.getInt("heat", 40);
+          files.execute(() -> {
+            String message = archive.window(days, hi, hot).describe(days)
+                + "\n\n按当前阈值统计。记录中断、电源类型变化或采样相隔超过 150 秒会分段，空白时段不计时。";
+            runOnUiThread(() -> {
+              if (!isDestroyed() && !isFinishing()) new AlertDialog.Builder(this)
+                  .setTitle("养护历史").setMessage(message).setPositiveButton("完成", null)
+                  .setNeutralButton("更改范围", (d, w) -> historyReport()).show();
+            });
+          });
+        }).setNegativeButton("取消", null).show();
+  }
+
+  private void automationSettings() {
+    LinearLayout panel = box();
+    panel.setPadding(px(20), 0, px(20), 0);
+    text(panel, "指定一个接收应用后，它可在记录期间读取当前电量、阈值和充电建议，用于联动自己的智能插座。最终开关状态由接收应用和插座确认。", 15, INK, false);
+    EditText pkg = new EditText(this);
+    pkg.setSingleLine(true);
+    pkg.setHint("Android 包名，例如 net.dinglisch.android.taskerm");
+    pkg.setText(prefs.getString(AutomationSignal.RECIPIENT, ""));
+    panel.addView(pkg);
+    AlertDialog dialog = new AlertDialog.Builder(this).setTitle("本机自动化")
+        .setView(panel).setPositiveButton("保存", null)
+        .setNegativeButton("取消", null).setNeutralButton("关闭共享", (d, w) -> {
+          AutomationSignal.select(this, prefs, "");
+          msg("已关闭共享");
+        }).create();
+    dialog.show();
+    dialog.getButton(-1).setOnClickListener(v -> {
+      String dest = pkg.getText().toString().trim();
+      if (dest.length() > 255 || !dest.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
+          || dest.equals(getPackageName())) {
+        pkg.setError("请输入接收应用的完整包名");
+        return;
+      }
+      AutomationSignal.select(this, prefs, dest);
+      refreshWatch();
+      dialog.dismiss();
+      msg("已保存，开启记录后向所选应用共享当前状态");
+    });
   }
 
   private void toggleManual() {

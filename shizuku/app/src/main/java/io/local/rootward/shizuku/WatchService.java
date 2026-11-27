@@ -73,6 +73,7 @@ public final class WatchService extends Service {
   @Override
   public int onStartCommand(Intent i, int flags, int id) {
     SharedPreferences p = ObserverApp.prefs(this);
+    getSystemService(NotificationManager.class).cancel(RestoreWatch.RECOVERY_NOTICE);
     if ((i != null && "stop".equals(i.getAction())) || !p.getBoolean("watch", false)) {
       p.edit().putBoolean("watch", false).putBoolean("cruise", false).apply();
       startForeground(31, notice(STATUS, "归根正在停止记录", "检查本次巡航留下的驱动状态", true));
@@ -120,6 +121,7 @@ public final class WatchService extends Service {
               false));
     } else if (thermal && r.temp != Integer.MIN_VALUE && r.temp <= (hot - 2) * 10)
       p.edit().putBoolean("thermal", false).apply();
+    AutomationSignal.publish(this, p, phase, r.level, lo, hi, r.temp);
     cruise.sample();
     if (lastSaved == 0
         || r.time - lastSaved >= 55000
@@ -148,6 +150,7 @@ public final class WatchService extends Service {
   @Override
   public void onDestroy() {
     running = false;
+    AutomationSignal.stopped(this);
     if (registered) unregisterReceiver(receiver);
     handler.removeCallbacks(timer);
     cruise.close();

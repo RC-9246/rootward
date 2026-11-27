@@ -32,6 +32,8 @@ public final class BatteryView {
         void toggleCableHold();
         void reloadCableHold();
         void toggleManualResume();
+        void startDaemon();
+        void schedule();
     }
 
     public final View root;
@@ -48,9 +50,11 @@ public final class BatteryView {
     private TextView percentage, charge, supply, temp, currentValue, condition, driver, configured, diagnostics;
     private TextView voltageValue, powerValue, flowText, policyText, thermalState, markLegend;
     private TextView cableHoldState;
-    private Button cableHoldButton, cableHoldReload;
+    private Button cableHoldButton, cableHoldReload, startDaemon;
     private Switch manualResumeSwitch;
     private TextView manualResumeHint;
+    private Button schedule;
+    private TextView scheduleHint;
     private String latestTemp = "—";
     private ScrollView dashboardPage, controlsPage;
     private Button dashboardTab, controlsTab, reload, diagnosticsButton, settingsButton, limitEntry;
@@ -283,6 +287,10 @@ public final class BatteryView {
             settingsButton.setText(settingsExpanded ? "收起完整设置" : "查看完整设置");
         });
         panel.addView(settingsButton);
+        startDaemon = actionButton("启动 ACC 守护进程", washed, accent);
+        startDaemon.setVisibility(View.GONE);
+        startDaemon.setOnClickListener(v -> actions.startDaemon());
+        panel.addView(startDaemon);
         gap(panel, 12);
         chargeEditor = new PairEditor(panel, false);
         gap(panel, 16);
@@ -309,6 +317,11 @@ public final class BatteryView {
         panel.addView(manualResumeSwitch, block());
         manualResumeHint = label("", 14, quiet, false);
         panel.addView(manualResumeHint, block());
+        schedule = actionButton("预约单次补电", washed, accent);
+        schedule.setOnClickListener(v -> actions.schedule());
+        panel.addView(schedule, block());
+        scheduleHint = label("", 14, quiet, false);
+        panel.addView(scheduleHint, block());
         body.addView(panel, block());
 
         gap(body, 12);
@@ -550,8 +563,13 @@ public final class BatteryView {
 
     public void setTemperatures(int resume, int pause) { temperatureEditor.setSaved(resume, pause); }
 
+    public void setDaemonStopped(boolean stopped) {
+        startDaemon.setVisibility(stopped ? View.VISIBLE : View.GONE);
+        startDaemon.setEnabled(stopped && !working);
+    }
+
     public void setCableHold(Boolean enabled, boolean loaded, boolean holding, boolean temperatureOverridesCapacity,
-                             boolean manualResume, int level, String checked) {
+                             boolean manualResume, int level, String checked, String window) {
         boolean on = Boolean.TRUE.equals(enabled);
         String text;
         if (enabled == null) {
@@ -577,12 +595,18 @@ public final class BatteryView {
         cableHoldReload.setEnabled(canEnable);
         manualResumeSwitch.setChecked(manualResume);
         boolean inBand = level > deviceLower && level < deviceUpper;
+        boolean planned = !window.isEmpty();
+        schedule.setText(planned ? "取消本轮预约" : "预约单次补电");
+        schedule.setEnabled(!working && (planned || (canEnable && on && loaded && holding && inBand)));
+        scheduleHint.setText(planned ? "已预约 " + window + "。到原上限或窗口结束恢复巡航。"
+                : "等待回落时可选一个开始时间，届时温控允许才提前补电，窗口为 1 小时。");
         manualResumeSwitch.setEnabled(!working && (manualResume || (canEnable && on && loaded && holding && inBand)));
         String hint;
         if (manualResume) hint = "本次允许补到 " + deviceUpper + "%，到上限自动关闭。提前关闭会恢复等待下限。";
         else if (!on) hint = "开启跨插拔保持后，可以在回落途中提前补一次电。";
         else if (!loaded) hint = "先重新载入巡航插件，再使用本次补电。";
-        else if (level >= deviceUpper) hint = "电量已到上限，回落到区间内后可手动补电。";
+        else if (level < 0) hint = "尚未读到 ACC 控制使用的电量，请刷新后重试。";
+        else if (level >= deviceUpper) hint = "驱动电量已到上限，回落到区间内后可手动补电。";
         else if (temperatureOverridesCapacity) hint = "当前温度恢复规则与严格回落冲突。";
         else if (holding) hint = "提前补到原上限 " + deviceUpper + "%，全程沿用 ACC 温控。";
         else hint = "当前已允许向上充电，无需提前补电。";

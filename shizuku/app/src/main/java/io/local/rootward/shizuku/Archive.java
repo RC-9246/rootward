@@ -14,19 +14,21 @@ import java.util.ArrayList;
 
 final class Archive extends SQLiteOpenHelper {
   Archive(Context c) {
-    super(c, "history.sqlite", null, 1);
+    super(c, "history.sqlite", null, 2);
   }
 
   @Override
   public void onCreate(SQLiteDatabase db) {
     db.execSQL(
         "CREATE TABLE samples (id INTEGER PRIMARY KEY, ts INTEGER, session INTEGER, pct INTEGER,"
-            + " temp INTEGER, mv INTEGER, ua INTEGER, plugged INTEGER, status INTEGER)");
+            + " temp INTEGER, mv INTEGER, ua INTEGER, plugged INTEGER, status INTEGER, charge_uah INTEGER)");
     db.execSQL("CREATE INDEX by_time ON samples(ts)");
   }
 
   @Override
-  public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {}
+  public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
+    if (oldV < 2) db.execSQL("ALTER TABLE samples ADD COLUMN charge_uah INTEGER");
+  }
 
   void record(Reading r, long session) {
     ContentValues v = new ContentValues();
@@ -38,50 +40,24 @@ final class Archive extends SQLiteOpenHelper {
     v.put("ua", r.current);
     v.put("plugged", r.plug);
     v.put("status", r.status);
+    if (r.chargeUah > 0) v.put("charge_uah", r.chargeUah);
     SQLiteDatabase db = getWritableDatabase();
     db.insertOrThrow("samples", null, v);
     db.delete("samples", "ts < ?", new String[] {String.valueOf(r.time - 30L * 86400000)});
   }
 
-  String summary(int hi, int hot) {
-    long span = 0, high = 0, warm = 0, both = 0, last = 0, lastSession = -1;
-    boolean wasHigh = false, wasWarm = false;
-    int n = 0;
-    try (Cursor c =
-        getReadableDatabase()
-            .rawQuery(
-                "SELECT ts,session,pct,temp FROM samples WHERE ts>=? ORDER BY id",
-                new String[] {String.valueOf(System.currentTimeMillis() - 86400000)})) {
-      while (c.moveToNext()) {
-        long ts = c.getLong(0), s = c.getLong(1), dt = ts - last;
-        if (s == lastSession && dt > 0 && dt <= 150000) {
-          span += dt;
-          if (wasHigh) high += dt;
-          if (wasWarm) warm += dt;
-          if (wasHigh && wasWarm) both += dt;
-        }
-        wasHigh = c.getInt(2) >= hi;
-        wasWarm = !c.isNull(3) && c.getInt(3) >= hot * 10;
-        last = ts;
-        lastSession = s;
-        n++;
-      }
+  UsageWindow window(int days, int high, int hot) {
+    long now = System.currentTimeMillis();
+    long from = now - days * 86400000L;
+    UsageWindow report = new UsageWindow(from, high, hot);
+    try (Cursor c = getReadableDatabase().rawQuery(
+        "SELECT ts,session,pct,temp,plugged,status,charge_uah FROM samples WHERE ts>=? AND ts<=? ORDER BY id",
+        new String[] {String.valueOf(from - UsageWindow.MAX_GAP), String.valueOf(now)})) {
+      while (c.moveToNext())
+        report.add(c.getLong(0), c.getLong(1), c.getInt(2),
+            c.isNull(3) ? Integer.MIN_VALUE : c.getInt(3), c.getInt(4), c.getInt(5), c.isNull(6) ? 0 : c.getInt(6));
     }
-    return "近 24 小时 · "
-        + n
-        + " 个样本，可计时 "
-        + span / 60000
-        + " 分钟\n≥"
-        + hi
-        + "% "
-        + high / 60000
-        + " 分钟  ·  ≥"
-        + hot
-        + "°C "
-        + warm / 60000
-        + " 分钟\n高电量与高温重叠 "
-        + both / 60000
-        + " 分钟";
+    return report;
   }
 
   ArrayList<PointF> recentLevels() {
@@ -96,7 +72,7 @@ final class Archive extends SQLiteOpenHelper {
       while (c.moveToNext()) {
         long ts = c.getLong(0);
         long s = c.getLong(2);
-        if (ts < last || ts - last > 150000 || s != session) out.add(null);
+        if (ts < last || ts - last > UsageWindow.MAX_GAP || s != session || c.getInt(1) < 0) out.add(null);
         if (c.getInt(1) >= 0)
           out.add(new PointF((float) ((ts - now + 3600000) / 3600000d), c.getInt(1) / 100f));
         last = ts;
@@ -112,13 +88,13 @@ final class Archive extends SQLiteOpenHelper {
         Cursor c =
             getReadableDatabase()
                 .rawQuery(
-                    "SELECT ts,session,pct,temp,mv,ua,plugged,status FROM samples WHERE ts>=? ORDER"
+                    "SELECT ts,session,pct,temp,mv,ua,plugged,status,charge_uah FROM samples WHERE ts>=? ORDER"
                         + " BY id",
                     new String[] {String.valueOf(System.currentTimeMillis() - 30L * 86400000)})) {
       out.write(
-          "unix_millis,sampling_segment,battery_percent,temperature_deci_c,battery_mV,battery_current_uA,android_plugged,android_status\n");
+          "unix_millis,sampling_segment,battery_percent,temperature_deci_c,battery_mV,battery_current_uA,android_plugged,android_status,remaining_charge_uAh\n");
       while (c.moveToNext()) {
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 9; i++) {
           if (i > 0) out.write(',');
           if (!c.isNull(i)) out.write(c.getString(i));
         }

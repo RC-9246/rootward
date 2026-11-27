@@ -8,7 +8,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -42,7 +41,7 @@ final class CruiseDriver {
     args =
         new Shizuku.UserServiceArgs(new ComponentName(context, BatteryReader.class))
             .tag("rootward-cruise")
-            .version(2)
+            .version(3)
             .daemon(false)
             .processNameSuffix("battery_cruise");
     thread.start();
@@ -148,9 +147,7 @@ final class CruiseDriver {
         evaluated(sequence);
         return;
       }
-      if (!Shizuku.pingBinder()
-          || Shizuku.getUid() != 2000
-          || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+      if (!Shizuku.pingBinder() || Shizuku.getUid() != 2000 || !ObserverApp.shellPermission()) {
         unavailable("Shizuku 的 ADB shell 连接或授权已中断。", sequence);
         return;
       }
@@ -208,14 +205,29 @@ final class CruiseDriver {
   }
 
   private void syncDriver() throws RemoteException {
-    int observed = reader.chargeBehaviour(ChargeBehaviour.PROBE);
+    android.os.Bundle sample = reader.chargeMode("", ChargeBehaviour.PROBE);
+    int observed = sample.getInt("mode", ChargeBehaviour.UNCONFIRMED);
+    String driver = sample.getString("id", "");
     Hold previous =
         prefs.getBoolean("cruiseUncertain", false)
             ? Hold.UNCERTAIN
             : prefs.getBoolean("cruiseOwned", false) ? Hold.OWNED : Hold.NONE;
     String boot = currentBoot();
-    Hold hold = previous.reconcile(observed, boot.equals(prefs.getString("cruiseBoot", "")));
-    if (hold != previous && !claim(hold, boot)) return;
+    // Retain ownership across a temporary missing/denied probe; reconcile only a known driver mode.
+    boolean identified =
+        !driver.isEmpty()
+            && (observed == ChargeBehaviour.AUTO
+                || observed == ChargeBehaviour.INHIBITED
+                || observed == ChargeBehaviour.EXTERNAL);
+    Hold hold =
+        !identified
+            ? previous
+            : previous.reconcile(
+                observed,
+                boot.equals(prefs.getString("cruiseBoot", ""))
+                    && !driver.isEmpty()
+                    && driver.equals(prefs.getString("cruiseBattery", "")));
+    if (hold != previous && !claim(hold, boot, driver)) return;
     if (observed != ChargeBehaviour.AUTO && observed != ChargeBehaviour.INHIBITED) {
       problem(
           (observed == ChargeBehaviour.EXTERNAL ? "系统已选择其他驱动模式。" : "驱动未确认可读写的标准充电模式。")
@@ -251,21 +263,29 @@ final class CruiseDriver {
       sample();
       return;
     }
+    if (!ObserverApp.shellPermission()) {
+      problem("Shizuku 授权已中断。请重新连接后核对充电模式。");
+      return;
+    }
     if (operation == ChargeBehaviour.ACQUIRE) {
       // A process death or a lost Binder reply leaves an explicit ambiguous marker.
-      if (!claim(Hold.UNCERTAIN, boot)) return;
-      int after = reader.chargeBehaviour(operation);
+      if (!claim(Hold.UNCERTAIN, boot, driver)) return;
+      int after = reader.chargeMode(driver, operation).getInt("mode", ChargeBehaviour.UNCONFIRMED);
       if (after == ChargeBehaviour.INHIBITED) {
-        if (claim(Hold.OWNED, boot)) status(hot ? "驱动已确认因温度暂停充电。" : "驱动已确认巡航暂停充电。");
+        if (claim(Hold.OWNED, boot, driver)) status(hot ? "驱动已确认因温度暂停充电。" : "驱动已确认巡航暂停充电。");
       } else if (after == ChargeBehaviour.UNCONFIRMED) {
         problem("暂停请求未获驱动确认。请检查驱动并按需手动恢复系统控制。");
-      } else if (claim(Hold.NONE, boot)) {
+      } else if (claim(Hold.NONE, boot, driver)) {
         problem("驱动未接受归根停充。已有的模式保持原样。");
       }
     } else {
-      int after = reader.chargeBehaviour(ChargeBehaviour.RESUME);
+      int after =
+          reader
+              .chargeMode(driver, ChargeBehaviour.RESUME)
+              .getInt("mode", ChargeBehaviour.UNCONFIRMED);
       if (after == ChargeBehaviour.AUTO) {
-        if (claim(Hold.NONE, boot)) status(active ? "驱动已恢复系统自动充电；系统阈值和温控仍生效。" : "已解除归根停充，并关闭硬件巡航。");
+        if (claim(Hold.NONE, boot, driver))
+          status(active ? "驱动已恢复系统自动充电；系统阈值和温控仍生效。" : "已解除归根停充，并关闭硬件巡航。");
       } else problem("解除归根停充尚未确认；重连后将再次核对。");
     }
   }
@@ -281,13 +301,14 @@ final class CruiseDriver {
     return PROCESS_SESSION;
   }
 
-  private boolean claim(Hold hold, String boot) {
+  private boolean claim(Hold hold, String boot, String driver) {
     boolean saved =
         prefs
             .edit()
             .putBoolean("cruiseOwned", hold == Hold.OWNED)
             .putBoolean("cruiseUncertain", hold == Hold.UNCERTAIN)
             .putString("cruiseBoot", boot)
+            .putString("cruiseBattery", driver)
             .commit();
     if (!saved) problem("归根无法保存停充归属；请检查驱动当前状态。");
     return saved;

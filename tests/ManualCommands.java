@@ -12,6 +12,8 @@ public class ManualCommands {
         Path target = Paths.get(args[1]);
         save(target.resolve("resume"), StrictHold.manualCommand(true, plugin));
         save(target.resolve("cancel"), StrictHold.manualCommand(false, null));
+        save(target.resolve("schedule"), StrictHold.scheduleCommand(System.currentTimeMillis()/1000 + 1800, plugin));
+        save(target.resolve("cancelSchedule"), StrictHold.scheduleCommand(0, null));
         save(target.resolve("snapshot"), StrictHold.SNAPSHOT);
     }
     private static void save(Path target, String s) throws Exception {

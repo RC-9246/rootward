@@ -40,6 +40,33 @@ rootward_percent() {
   case "$1" in 0|[1-9]|[1-9][0-9]|100) return 0 ;; *) return 1 ;; esac
 }
 
+# Each reservation has a unique path. Removing an expired record cannot
+# remove a newer one created concurrently by the app.
+rootward_schedule() {
+  local lo=$1 hi=$2 level=$3 record name at expected_lo expected_hi now temp_value
+  set -- "$rootward_dir"/plan-*
+  [ -f "$1" ] || return 1
+  if [ "$#" -ne 1 ]; then rm -f "$@"; return 1; fi
+  record=$1
+  name=${record##*/plan-}
+  at=${name%%-*}; name=${name#*-}
+  expected_lo=${name%%-*}; name=${name#*-}; expected_hi=${name%%.*}
+  case "$at" in ??????????) ;; *) rm -f "$record"; return 1;; esac
+  case "$at" in *[!0-9]*) rm -f "$record"; return 1;; esac
+  if ! $rootward_waiting || [ "$lo" != "$expected_lo" ] || [ "$hi" != "$expected_hi" ] ||
+      [ "$level" -le "$lo" ] || [ "$level" -ge "$hi" ]; then
+    rm -f "$record"; return 1
+  fi
+  now=$(date +%s) || return 1
+  if [ "$now" -lt "$at" ]; then return 1; fi
+  if [ "$((now - at))" -ge 3600 ]; then rm -f "$record"; return 1; fi
+  # ACC can substitute .dummy-temp when an unsupported device lacks a sensor.
+  case "${temp:-}" in */temp|*/batt_temp) ;; *) return 1;; esac
+  IFS= read -r temp_value 2>/dev/null < "$temp" || return 1
+  case "$temp_value" in ''|*[!0-9]*) return 1;; esac
+  [ "$temp_value" -lt "$((${temperature[1]} * 10))" ]
+}
+
 rootward_refresh() {
   rootward_strict=false
   rootward_waiting=false
@@ -52,8 +79,8 @@ rootward_refresh() {
   if ! $rootward_loaded; then
     [ "$(stat -c '%u:%g:%a' "$rootward_dir")" = '0:0:700' ] || return 0
     # Publish inside the root-owned directory rather than ACC's shared tmpfs.
-    (umask 077; printf '%s\n' "$$" > "$rootward_dir/loaded-v2-pid.new" &&
-      mv -f "$rootward_dir/loaded-v2-pid.new" "$rootward_dir/loaded-v2-pid") || return 0
+    (umask 077; printf '%s\n' "$$" > "$rootward_dir/loaded-v3-pid.new" &&
+      mv -f "$rootward_dir/loaded-v3-pid.new" "$rootward_dir/loaded-v3-pid") || return 0
     rootward_loaded=true
   fi
 
@@ -63,6 +90,7 @@ rootward_refresh() {
     # An external switch to voltage mode invalidates the old percentage phase.
     [ ! -f "$rootward_dir/holding" ] || rm -f "$rootward_dir/holding"
     [ ! -f "$rootward_dir/resume-once" ] || rm -f "$rootward_dir/resume-once"
+    rm -f "$rootward_dir"/plan-*
     return 0
   fi
 
@@ -70,6 +98,7 @@ rootward_refresh() {
   offMid=false   # ACC otherwise infers a stop from a mid-band daemon restart.
   [ ! -f "$rootward_dir/holding" ] || rootward_waiting=true
   IFS= read -r level 2>/dev/null < "$battCapacity" && rootward_percent "$level" || return 0
+  rootward_schedule "$lower" "$upper" "$level" || :
   if [ -f "$rootward_dir/resume-once" ]; then
     local target
     if $rootward_waiting && IFS= read -r target < "$rootward_dir/resume-once" &&
@@ -100,9 +129,12 @@ src_cfg() {
 # when capacity changes between the config refresh and the decision.
 rootward_resume_once() {
   local target level
-  [ -f "$rootward_dir/enabled" ] && [ -f "$rootward_dir/resume-once" ] || return 1
-  IFS= read -r target < "$rootward_dir/resume-once" && [ "$target" = "${capacity[3]}" ] || return 1
+  [ -f "$rootward_dir/enabled" ] || return 1
   IFS= read -r level 2>/dev/null < "$battCapacity" && rootward_percent "$level" || return 1
+  if [ ! -f "$rootward_dir/resume-once" ]; then
+    rootward_schedule "${capacity[2]}" "${capacity[3]}" "$level"; return $?
+  fi
+  IFS= read -r target < "$rootward_dir/resume-once" && [ "$target" = "${capacity[3]}" ] || return 1
   [ "$level" -lt "$target" ] && return 0
   rm -f "$rootward_dir/resume-once"
   return 1

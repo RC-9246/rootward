@@ -2,6 +2,7 @@ package io.local.accpanel;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.TimePickerDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -11,6 +12,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
@@ -19,21 +21,24 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Calendar;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity implements BatteryView.Actions {
-    private static final int READ = 0, CAPACITY = 1, TEMPERATURE = 2, CABLE_HOLD = 3, READ_PHASE = 4, MANUAL_RESUME = 5;
+    private static final int READ = 0, CAPACITY = 1, TEMPERATURE = 2, CABLE_HOLD = 3, READ_PHASE = 4, MANUAL_RESUME = 5, START_DAEMON = 6, SCHEDULE = 7;
     private static final long SAMPLE_INTERVAL_MS = 10_000;
+    private static final long CONTROL_REFRESH_MS = 60_000;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final History history = new History();
     private final Runnable sampleAgain = new Runnable() {
         @Override public void run() {
-            if (refreshPhase && !busy && !readingPhase) {
+            if (state != null && !busy && !readingPhase
+                    && (refreshPhase || SystemClock.elapsedRealtime() - lastControlRead >= CONTROL_REFRESH_MS)) {
                 refreshPhase = false;
-                if (state != null && Boolean.TRUE.equals(state.cableHold)) MainActivity.this.run(READ_PHASE, 0, 0);
+                MainActivity.this.run(READ_PHASE, 0, 0);
             }
             int oldLevel = batteryLevel, oldPlug = plugged;
             sample();
@@ -48,6 +53,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     private AccBackend.State state;
     private boolean busy;
     private boolean refreshPhase, readingPhase;
+    private long lastControlRead;
     private String problem = "", checked = "";
     private String percent = "—", charging = "未知", power = "未知", temperature = "—", current = "—", health = "未知";
     private String voltage = "—";
@@ -65,7 +71,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
 
     @Override protected void onStart() {
         super.onStart();
-        refreshPhase = state != null && Boolean.TRUE.equals(state.cableHold);
+        refreshPhase = state != null;
         sampleAgain.run();
     }
 
@@ -174,12 +180,14 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         if (state == null) return busy ? "正在向 ACC 读取充电上限和恢复条件。"
                 : getString(R.string.root_authorization_hint, getString(R.string.app_name));
         if (!"运行中".equals(state.daemon)) return "ACC 守护进程状态为「" + state.daemon + "」。已保存的阈值可能尚未执行。";
-        if (cellTemperature >= state.maxTemp)
-            return "电池温度已达到 " + state.maxTemp + "°C 暂停线。降至 " + state.resumeTemp + "°C 并满足其他条件后才允许恢复。";
+        if (state.driverTempTenths != null && state.driverTempTenths >= state.maxTemp * 10)
+            return "上次驱动温度已达到 " + state.maxTemp + "°C 暂停线。恢复温度设为 " + state.resumeTemp + "°C。";
+        if (state.driverTempTenths == null && cellTemperature >= state.maxTemp)
+            return "Android 温度读数已达到 " + state.maxTemp + "°C，ACC 温度传感器读数未知。";
         if (state.upper > 100 || state.lower > 100) return "ACC 正在使用电压阈值。";
         if (plugged == 0) return "正在使用电池。上限为 " + state.upper + "%，恢复电量设为 " + state.lower + "%。";
         if (plugged > 0 && batteryLevel >= state.upper && chargeStatus == BatteryManager.BATTERY_STATUS_CHARGING)
-            return "已达到 " + state.upper + "% 停充线，Android 仍报告充电中。可在趋势中继续观察。";
+            return "Android 电量已达到 " + state.upper + "% 且仍报告充电中。";
         if (plugged > 0 && chargeStatus == BatteryManager.BATTERY_STATUS_CHARGING)
             return "Android 报告正在充电。配置的停充上限为 " + state.upper + "%。";
         if (plugged > 0 && chargeStatus == BatteryManager.BATTERY_STATUS_NOT_CHARGING) {
@@ -212,14 +220,52 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         }
         ui.render(percent, charging, power, temperature, current, health, driver,
                 settings, details, canWrite(), busy);
+        int controlLevel = state == null || state.driverLevel == null ? -1 : state.driverLevel;
+        ui.setDaemonStopped(state != null && "已停止".equals(state.daemon));
+        String window = state == null || state.scheduledAt == 0 ? "" : scheduleWindow(state.scheduledAt);
         ui.setCableHold(state == null ? null : state.cableHold, state != null && state.holdLoaded,
                 state != null && state.holding, state != null && state.resumeOverridesCapacity,
-                state != null && state.manualResume, batteryLevel, checked);
+                state != null && state.manualResume, controlLevel, checked, window);
         String policy = policyDescription();
+        if (state != null) {
+            String driverLevel = controlLevel < 0 ? "未知" : controlLevel + "%";
+            String driverTemp = state.driverTempTenths == null ? "温度未知"
+                    : String.format(Locale.ROOT, "%.1f °C", state.driverTempTenths / 10f);
+            policy += "\n" + checked + " 驱动回读 · " + driverLevel + " · " + driverTemp + " · "
+                    + (state.driverStatus == null ? "状态未知" : state.driverStatus);
+        }
         if (state != null && Boolean.TRUE.equals(state.cableHold))
             policy += "\n" + checked + " 读回 · " + (state.manualResume ? "本次提前补至原上限" : state.holding ? "等待恢复下限" : "允许充向上限")
                     + (state.holdLoaded ? "。" : "（阶段已保存，插件待载入）。");
+        if (!window.isEmpty()) policy += "\n预约补电窗口  " + window + "，温控允许时可提前补电。";
         ui.setElectrical(voltage, batteryWatts, powerFlow(), policy);
+    }
+
+    private static String scheduleWindow(long seconds) {
+        SimpleDateFormat fmt = new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault());
+        return fmt.format(new Date(seconds * 1000L)) + " 至 " + fmt.format(new Date((seconds + 3600) * 1000L));
+    }
+
+    @Override public void schedule() {
+        if (state == null || busy) return;
+        if (state.scheduledAt != 0) { run(SCHEDULE, 0, 0, 0); return; }
+        Calendar suggested = Calendar.getInstance();
+        suggested.add(Calendar.HOUR_OF_DAY, 1);
+        TimePickerDialog picker = new TimePickerDialog(this, (view, hour, minute) -> {
+            Calendar when = Calendar.getInstance();
+            when.set(Calendar.HOUR_OF_DAY, hour);
+            when.set(Calendar.MINUTE, minute);
+            when.set(Calendar.SECOND, 0);
+            when.set(Calendar.MILLISECOND, 0);
+            if (when.getTimeInMillis() <= System.currentTimeMillis()) when.add(Calendar.DATE, 1);
+            long at = when.getTimeInMillis() / 1000L;
+            new AlertDialog.Builder(this).setTitle("预约本轮补电")
+                    .setMessage(scheduleWindow(at) + "，温度和供电条件允许时可提前充到原上限。窗口结束、自然到达下限或更改电量区间后预约失效。")
+                    .setPositiveButton("预约", (d, w) -> run(SCHEDULE, 0, 0, at))
+                    .setNegativeButton("取消", null).show();
+        }, suggested.get(Calendar.HOUR_OF_DAY), suggested.get(Calendar.MINUTE), true);
+        picker.setTitle("选择开始补电的本地时间");
+        picker.show();
     }
 
     @Override public void refresh() {
@@ -235,9 +281,9 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
             return;
         }
         if (!canWrite() || state.resumeOverridesCapacity) return;
-        sample();
-        if (batteryLevel >= state.upper) run(CABLE_HOLD, 1, 1);
-        else if (batteryLevel >= 0 && batteryLevel <= state.lower) run(CABLE_HOLD, 1, 0);
+        Integer level = state.driverLevel;
+        if (level != null && level >= state.upper) run(CABLE_HOLD, 1, 1);
+        else if (level != null && level <= state.lower) run(CABLE_HOLD, 1, 0);
         else new AlertDialog.Builder(this).setTitle("选择本轮巡航阶段")
                 .setItems(new String[]{"本轮已经到过上限，继续等下限", "本轮正在充向上限"},
                         (dialog, index) -> run(CABLE_HOLD, 1, index == 0 ? 1 : 0))
@@ -251,6 +297,9 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     @Override public void toggleManualResume() {
         if (state == null || busy || (!state.manualResume && !canWrite())) { render(); return; }
         run(MANUAL_RESUME, state.manualResume ? 0 : 1, 0);
+    }
+    @Override public void startDaemon() {
+        if (state != null && "已停止".equals(state.daemon)) run(START_DAEMON, 0, 0);
     }
     private String readHoldPlugin() throws IOException {
         try (InputStream source = getResources().openRawResource(R.raw.rootward_hold)) {
@@ -266,10 +315,15 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     private SharedPreferences original() { return getSharedPreferences("first_read", MODE_PRIVATE); }
 
     private void run(int action, int first, int second) {
+        run(action, first, second, 0);
+    }
+
+    private void run(int action, int first, int second, long at) {
         boolean passive = action == READ_PHASE;
         boolean reading = action == READ || passive;
         boolean removingHoldOrOverride = first == 0 && (action == CABLE_HOLD || action == MANUAL_RESUME);
-        if (busy || (!reading && !removingHoldOrOverride && !canWrite())) return;
+        boolean cancelPlan = action == SCHEDULE && at == 0;
+        if (busy || (!reading && !removingHoldOrOverride && !cancelPlan && action != START_DAEMON && !canWrite())) return;
         if (passive) readingPhase = true;
         else {
             busy = true;
@@ -283,6 +337,8 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                 else if (action == TEMPERATURE) result = AccBackend.applyTemperature(first, second);
                 else if (action == CABLE_HOLD) result = AccBackend.setCableHold(first == 1, readHoldPlugin(), second == 1);
                 else if (action == MANUAL_RESUME) result = AccBackend.setManualResume(first == 1, readHoldPlugin());
+                else if (action == START_DAEMON) result = AccBackend.startDaemon();
+                else if (action == SCHEDULE) result = AccBackend.schedule(at, readHoldPlugin());
                 else result = AccBackend.read();
                 if (!original().contains("lower") && result.upper <= 100 && result.lower <= 100)
                     original().edit().putInt("lower", result.lower).putInt("upper", result.upper)
@@ -296,12 +352,14 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                     busy = false;
                     AccBackend.State previous = state;
                     state = result;
+                    lastControlRead = SystemClock.elapsedRealtime();
                     checked = new SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new Date(result.snapshotMillis));
                     if (previous == null || action == CAPACITY || previous.lower != result.lower || previous.upper != result.upper)
                         ui.setThresholds(result.lower, result.upper);
                     if (previous == null || action == TEMPERATURE || previous.resumeTemp != result.resumeTemp || previous.maxTemp != result.maxTemp)
                         ui.setTemperatures(result.resumeTemp, result.maxTemp);
-                    if (!reading) Toast.makeText(this, "已从 ACC 读回并核对新设置", Toast.LENGTH_SHORT).show();
+                    if (!reading) Toast.makeText(this, action == START_DAEMON ? "已读回 ACC 正在运行"
+                            : "已从 ACC 读回并核对新设置", Toast.LENGTH_SHORT).show();
                     render();
                 });
             } catch (Exception err) {
@@ -309,11 +367,11 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                     if (isDestroyed() || isFinishing()) return;
                     if (passive) {
                         readingPhase = false;
-                        return;
+                        if (busy) return;
                     }
                     busy = false;
                     state = null;
-                    problem = (action == READ ? "读取失败" : "写入未确认，请刷新核对")
+                    problem = (reading ? "读取失败，请刷新" : "写入未确认，请刷新核对")
                             + " · " + (err.getMessage() == null ? "ACC 暂不可用" : err.getMessage());
                     render();
                 });

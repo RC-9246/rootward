@@ -58,7 +58,7 @@ public final class ChargeBehaviourTest {
     check(contents(node).equals(AUTO_MODES), "probe must open without truncating");
     ModeWriter kernel =
         (file, hold) -> {
-          check(node.equals(file), "writes only the expected battery attribute");
+          check(node.toRealPath().equals(file), "writes only the expected battery attribute");
           ChargeBehaviour.submit(file, hold);
           String expected = hold ? "inhibit-charge\n" : "auto\n";
           check(contents(file).startsWith(expected), "actual bytes written to the driver");
@@ -169,7 +169,25 @@ public final class ChargeBehaviourTest {
     Path alternate = Files.createDirectory(root.resolve("BAT0"));
     put(alternate.resolve("type"), "Battery");
     put(alternate.resolve("charge_behaviour"), AUTO_MODES);
-    expect(AUTO, apply(2000, PROBE, root, NEVER_WRITE), "BAT0 fixed fallback");
+    expect(UNAVAILABLE, apply(2000, PROBE, root, NEVER_WRITE), "ambiguous internal batteries");
+    put(battery.resolve("present"), "0");
+    expect(AUTO, apply(2000, PROBE, root, NEVER_WRITE), "unique present BAT0");
+    ChargeBehaviour.Result sample = new ChargeBehaviour.Result();
+    expect(AUTO, mode(2000, PROBE, root, NEVER_WRITE, "", sample), "driver identity");
+    expect(
+        UNCONFIRMED,
+        mode(2000, PAUSE, root, NEVER_WRITE, "stale", sample),
+        "block stale driver write");
+    put(alternate.resolve("scope"), "Device");
+    expect(UNAVAILABLE, apply(2000, PROBE, root, NEVER_WRITE), "ignore accessory named BAT0");
+    Path internal = Files.createDirectory(root.resolve("main-pack"));
+    put(internal.resolve("type"), "Battery");
+    put(internal.resolve("scope"), "System");
+    put(internal.resolve("charge_behaviour"), AUTO_MODES);
+    expect(
+        AUTO,
+        apply(2000, PROBE, root, NEVER_WRITE),
+        "standard system scope and nonconventional name");
   }
 
   public static void main(String[] args) throws Exception {

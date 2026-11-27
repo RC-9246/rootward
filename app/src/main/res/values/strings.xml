@@ -1,4 +1,0 @@
-<resources>
-    <string name="app_name">Rootward</string>
-    <string name="root_authorization_hint">在 root 管理器中授权「%1$s」，回到这里点刷新，即可显示手机的充电策略。</string>
-</resources>

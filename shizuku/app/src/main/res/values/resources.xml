@@ -1,9 +1,0 @@
-<resources>
-    <string name="app_name">归根 · Shizuku</string>
-    <color name="icon_background">#1B4C47</color>
-    <style name="Theme" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:colorAccent">#176854</item>
-        <item name="android:statusBarColor">#173E36</item>
-        <item name="android:navigationBarColor">#173E36</item>
-    </style>
-</resources>

@@ -123,6 +123,10 @@ final class NativeLimitsDialog {
     input.setText(Integer.toString(old));
     input.selectAll();
     LinearLayout body = details(a, "当前值 " + old + "%。输入 " + min + "–" + max + "%，驱动可能取整。");
+    TextView label = new TextView(a);
+    label.setText(endpoint + "（%）");
+    body.addView(label);
+    DisplayLayout.labelInput(label, input);
     body.addView(input, new LinearLayout.LayoutParams(-1, -2));
     AlertDialog dialog =
         new AlertDialog.Builder(a)

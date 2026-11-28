@@ -8,6 +8,8 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.widget.ScrollView;
+import android.widget.EditText;
+import android.widget.TextView;
 
 final class DisplayLayout {
   static void protectContent(Activity activity, View page) {
@@ -34,6 +36,13 @@ final class DisplayLayout {
           v.setPadding(safe.left, safe.top, safe.right, safe.bottom);
           return insets;
         });
+  }
+
+  static void labelInput(TextView label, EditText input) {
+    input.setId(View.generateViewId());
+    label.setLabelFor(input.getId());
+    int minimum = Math.round(48 * input.getResources().getDisplayMetrics().density);
+    input.setMinHeight(minimum);
   }
 
   static ScrollView scrollForm(View form) {

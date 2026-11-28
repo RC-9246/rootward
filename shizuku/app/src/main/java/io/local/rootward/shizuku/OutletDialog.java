@@ -124,7 +124,8 @@ final class OutletDialog {
     id.setHint("switch.phone_charger");
     EditText token = field(a, box, "长期访问令牌", "");
     token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-    token.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_NO);
+    if (android.os.Build.VERSION.SDK_INT >= 26)
+      token.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_NO);
     TextView status = new TextView(a);
     status.setText("建议使用单独的 Home Assistant 用户和令牌。连接验证只读取这个开关。");
     box.addView(status);
@@ -169,6 +170,7 @@ final class OutletDialog {
     t.setText(label);
     box.addView(t);
     EditText e = new EditText(a);
+    DisplayLayout.labelInput(t, e);
     e.setSingleLine(true);
     e.setText(initial);
     box.addView(e);

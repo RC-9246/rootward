@@ -72,7 +72,7 @@ final class ShellLink {
     args =
         new Shizuku.UserServiceArgs(new ComponentName(activity, BatteryReader.class))
             .tag("rootward-diagnostics")
-            .version(4)
+            .version(5)
             .daemon(false)
             .processNameSuffix("battery_reader");
   }

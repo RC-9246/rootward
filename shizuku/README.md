@@ -1,6 +1,6 @@
 # 归根 · Shizuku | Rootward
 
-无需 root 的 Android 电池养护工具。支持 Android 8.0 及以上，界面使用中文，包名为 `io.local.rootward.shizuku`，可与归根 ACC 版并存。[下载签名 APK](https://raw.githubusercontent.com/RC-9246/rootward/downloads/android17/Rootward-Shizuku-1.3.apk)
+无需 root 的 Android 电池养护工具。支持 Android 7.0 及以上，界面使用中文，包名为 `io.local.rootward.shizuku`，可与归根 ACC 版并存。[下载签名 APK](https://raw.githubusercontent.com/RC-9246/rootward/downloads/v1.7/Rootward-Shizuku-1.4.apk)
 
 | 手机和外设条件 | 可以使用的功能 |
 | --- | --- |
@@ -15,6 +15,8 @@
 - 第一次观察到电量达到或超过 75% 时，归根提示可拔线，随后记住等待回落的阶段。在 51–74% 之间反复拔线、重插或重新打开应用，均保留该阶段。观察到 50% 或以下时，归根提示可以接电，并开始下一轮。
 - 处于等待回落阶段时，可以手动提前开始一轮。仅使用提醒时，开关显示「再次提醒我到达上限」，实际充电仍由手机和外部电源决定。启用硬件巡航或充电插座联动后，开关显示「手动继续充电一次」，归根会按本轮选择请求相应设备切换。中途关闭会恢复等待，达到原上限后自动结束。更改电量阈值也会结束这一轮提前补电。
 - 到达温度阈值时通知一次，温度回落至少 2°C 后允许下次通知。系统电池设置入口用于查看本机是否提供限充、智能充电或相应的人工控制。不同系统提供的选项会有差异。
+
+系统明确报告电池过冷、过热、过压、失效或其他故障时，归根会提示并暂停自动补电建议。硬件巡航、充电插座和本机自动化采用同一保护，手动提前一轮及预约仍服从该保护。其后若健康状态未知，归根继续等待；系统再次报告正常时，按原阈值及温控决定是否放行。在故障期间停用插座联动，归根确认关掉的插座会保持断电，可核对电池后从插座菜单显式恢复。
 
 ### 预约本轮提前补电
 
@@ -56,6 +58,8 @@
 
 ## 供电、散热与原厂养护
 
+「供电与散热诊断」还显示整台设备从本次开机起的累计深睡时间及占比、系统省电模式，以及 Android 9 及以上报告的本应用后台限制。数据由系统单调时钟推算，查看时无需开启记录。[Android 系统时钟](https://developer.android.com/reference/android/os/SystemClock)
+
 点首页「供电与散热诊断」即可读取电池端平均电流、剩余能量和系统热状态，无需连接 Shizuku。平均电流以电池为参照，流入表示净充电，流出表示净放电。Android 10 起可读取整机节流状态，Android 11 起可读取当前热负荷。热负荷 1.00 对应严重节流参考线，数值可以超过 1.00。点击刷新可更新快照，热负荷最多每 10 秒读取一次。设备未提供的量标为「未上报」。[Android 电池属性](https://developer.android.com/reference/android/os/BatteryManager) · [Android 热管理](https://developer.android.com/games/optimize/adpf/thermal) · [热负荷定义](https://developer.android.com/reference/android/os/PowerManager#getThermalHeadroom(int))
 
 「系统电池设置」优先打开已安装、可调用的 LineageOS 充电控制，其他系统打开公开电池设置，缺少电池页时可回到系统设置。归根按厂商给出原厂菜单路径，由使用者在系统中选择可用模式。Pixel 6a 起支持 80% 选项，Galaxy 提供电池保护，一加 8T 原厂手册列有按习惯调整的充电优化。第三方 ROM 的选项以实际系统页面为准。[LineageOS 入口](https://github.com/LineageOS/android_packages_apps_LineageParts/blob/lineage-22.2/AndroidManifest.xml#L88-L98) · [Pixel 帮助](https://support.google.com/pixelphone/answer/6090612) · [三星支持](https://www.samsung.com/us/support/answer/ANS10002534/) · [一加 8T 手册](https://service.oneplus.com/content/dam/support/user-manuals/cn/OnePlus_8T_User_Manual_CN.pdf) · [OxygenOS 14 手册](https://service.oneplus.com/content/dam/support/user-manuals/common/OxygenOS_14.0_User_Manual.pdf)
@@ -64,9 +68,9 @@
 
 ## Shizuku 诊断
 
-在 Shizuku 管理器中用 ADB 启动服务。Android 11 及以上可在支持无线调试的设备上通过配对完成，Android 8–10 可用电脑启动。回到归根，在 Shizuku 区域申请授权，然后读取诊断。手机重启后通常需要重新启动 Shizuku。[Shizuku 官方使用指南](https://shizuku.rikka.app/zh-hans/guide/setup/)
+在 Shizuku 管理器中用 ADB 启动服务。Android 11 及以上可在支持无线调试的设备上通过配对完成，Android 7–10 可用电脑启动。回到归根，在 Shizuku 区域申请授权，然后读取诊断。手机重启后通常需要重新启动 Shizuku。[Shizuku 官方使用指南](https://shizuku.rikka.app/zh-hans/guide/setup/)
 
-归根通过官方 Shizuku API 的 UserService 读取 shell 身份可访问的电池状态、循环次数、满充与设计容量、USB 在线状态、类型、电压与电流上限以及驱动温度。另读取系统电池服务报告的充电电流、电压上限与电荷计数。各机型公开的节点、单位与可读权限有差异，未提供的数据会标明。Shizuku 服务未运行或授权被拒绝时，标准 Android 电池读数、记录与提醒仍可使用。[Shizuku API](https://github.com/RikkaApps/Shizuku-API) · [Android BatteryManager](https://developer.android.com/reference/android/os/BatteryManager)
+归根通过官方 Shizuku API 的 UserService 读取 shell 身份可访问的电池状态、循环次数、满充与设计容量、USB 在线状态、类型、电压与电流上限以及驱动温度。另读取系统电池服务报告的充电电流、电压上限与电荷计数。驱动诊断按类型和归属寻找唯一内置电池及 USB 电源；同时发现多块内置电池时提示归属不明。驱动上报合法的生产年、月、日时会显示生产日期。各机型公开的节点、单位与可读权限有差异，未提供的数据会标明。Shizuku 服务未运行或授权被拒绝时，标准 Android 电池读数、记录与提醒仍可使用。[Shizuku API](https://github.com/RikkaApps/Shizuku-API) · [Android BatteryManager](https://developer.android.com/reference/android/os/BatteryManager)
 
 授权后点「查看各应用耗电估算」，可查看当前 Android 用户耗电最高的十个应用 UID。归根读取系统电池统计窗口内的 UID 耗电估算（mAh）。系统可能将多个应用计入同一 UID，包名、电量模型或统计片段都可能缺失。该快照在本机显示。[Android batterystats](https://developer.android.com/tools/dumpsys#battery)
 
@@ -86,7 +90,7 @@
 
 原生上下限由系统驱动解释，有些驱动仅在自定义充电模式下执行这些值。退出应用后设置可能继续保留。插拔时如何复充、是否包含边界值以及重启后是否保留设置取决于驱动。「撤销上一次修改」会将最近一次由归根成功更改的端点恢复为原值。记录保存在本机，退出并重新打开应用后仍可用。撤销前会再次核对电池身份、启动周期、写权限和两端实际值，完成后读回上下限。若期间更换电池、系统改过区间、写入回执不明或驱动联动修改另一端，界面会说明原因并显示记录中的原值。已开启前台硬件巡航时仍可查看这些值，需关闭巡航后手动修改。手动恢复系统自动充电后，驱动自身的阈值仍然有效。[Android 通用内核的 power_supply ABI](https://android.googlesource.com/kernel/common/+/android-mainline/Documentation/ABI/testing/sysfs-class-power#356)
 
-[Android 版本与界面验证范围](../docs/android-compatibility.md)
+[同类工具和原厂功能逐项对照](../docs/capability-review.md) · [Android 版本与界面验证范围](../docs/android-compatibility.md)
 
 ## 从源码构建
 
@@ -97,6 +101,8 @@
 ./build.sh
 ```
 
-构建过程从 Maven Central 和 Google Maven 下载固定版本的依赖并验证 SHA-256，然后签名及校验 `build/Rootward-Shizuku-1.3.apk`。默认与 ACC 版共用仓库外的 `signing/` 目录，可用 `ACC_SIGNING_DIR` 设置其他私有目录。自行构建的更新包需复用同一签名密钥。
+构建过程从 Maven Central 和 Google Maven 下载固定版本的依赖并验证 SHA-256，然后签名及校验 `build/Rootward-Shizuku-1.4.apk`。默认与 ACC 版共用仓库外的 `signing/` 目录，可用 `ACC_SIGNING_DIR` 设置其他私有目录。自行构建的更新包需复用同一签名密钥。
 
-Shizuku API 13.1.5 使用 MIT 许可证，AndroidX Annotation 1.3.0 使用 Apache License 2.0，这两份许可证随 APK 及源码附带于 `app/src/main/res/raw/`。
+Android 7 使用系统的传统通知。Android 8 起，若单独关闭电量与温度提醒渠道，归根会提示并提供对应的系统设置入口。
+
+构建使用 Google 的 desugar_jdk_libs_nio 2.1.5 为 Android 7 提供时间和文件 API，依赖摘要保存在 desugar-dependencies.txt，许可证随源码和 APK 一起分发。Shizuku API 13.1.5 使用 MIT 许可证，AndroidX Annotation 1.3.0 使用 Apache License 2.0，这两份许可证随 APK 及源码附带于 `app/src/main/res/raw/`。

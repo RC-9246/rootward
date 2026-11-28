@@ -1,7 +1,5 @@
 package io.local.rootward.shizuku;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
@@ -20,15 +18,13 @@ public final class RestoreWatch extends BroadcastReceiver {
         && !Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) return;
     if (!ObserverApp.prefs(context).getBoolean("watch", false)) return;
     try {
-      context.startForegroundService(new Intent(context, WatchService.class));
+      WatchNotices.start(context, new Intent(context, WatchService.class));
     } catch (IllegalStateException | SecurityException restricted) {
       // Keep the user's choice. Opening the activity can retry from the foreground.
       Log.w("Rootward", "Background monitoring restart was restricted", restricted);
       NotificationManager manager = context.getSystemService(NotificationManager.class);
       if (!manager.areNotificationsEnabled()) return;
-      manager.createNotificationChannel(
-          new NotificationChannel(
-              WatchService.ALERT, "电量与温度提醒", NotificationManager.IMPORTANCE_DEFAULT));
+      WatchNotices.ensureChannels(manager);
       PendingIntent open =
           PendingIntent.getActivity(
               context,
@@ -37,7 +33,7 @@ public final class RestoreWatch extends BroadcastReceiver {
               PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
       manager.notify(
           RECOVERY_NOTICE,
-          new Notification.Builder(context, WatchService.ALERT)
+          WatchNotices.builder(context, WatchService.ALERT)
               .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
               .setContentTitle("电池记录等待恢复")
               .setContentText("系统限制了后台启动，点此打开归根继续记录。")

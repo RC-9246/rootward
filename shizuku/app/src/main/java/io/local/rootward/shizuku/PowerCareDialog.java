@@ -1,6 +1,7 @@
 package io.local.rootward.shizuku;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
@@ -89,6 +90,15 @@ final class PowerCareDialog {
       }
     }
     long now = SystemClock.elapsedRealtime();
+    long awake = SystemClock.uptimeMillis();
+    long asleep = Math.max(0, now - awake);
+    String background = "系统省电模式" + (power != null && power.isPowerSaveMode() ? "已开启" : "已关闭");
+    if (Build.VERSION.SDK_INT >= 28) {
+      ActivityManager manager = a.getSystemService(ActivityManager.class);
+      if (manager != null) background += manager.isBackgroundRestricted()
+          ? "。本应用受到后台限制，记录或重启恢复可能中断。可在系统应用信息的电池设置中调整。"
+          : "。系统未报告本应用受到后台限制。";
+    }
     if (power != null && Build.VERSION.SDK_INT >= 30 && now - lastSample >= 10000) {
       lastSample = now;
       try {
@@ -126,6 +136,10 @@ final class PowerCareDialog {
         + headroom
         + (Build.VERSION.SDK_INT >= 30 ? "\n热负荷读数最多每 10 秒更新一次。" : "")
         + (note.isEmpty() ? "" : "\n" + note)
+        + "\n\n本次开机累计深睡  " + UsageWindow.duration(asleep)
+        + (now > 0 ? "（" + Math.round(100d * asleep / now) + "%）" : "")
+        + "\n开机经过  " + UsageWindow.duration(now)
+        + "。统计整台设备进入挂起的时间，息屏时也可能保持唤醒。\n" + background
         + "\n\n"
         + PowerCareReport.guide(
             Build.MANUFACTURER, Build.MODEL, systemActivity(a, chargingSettings()) != null);

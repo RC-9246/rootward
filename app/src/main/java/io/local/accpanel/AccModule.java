@@ -1,6 +1,7 @@
 package io.local.accpanel;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
@@ -25,7 +26,7 @@ final class AccModule {
 
     private AccModule() {}
 
-    static void show(Activity activity, String installedVersion) {
+    static AlertDialog dialog(Activity activity, String installedVersion) {
         String status = installedVersion == null ? "如设备尚未安装 ACC，可按以下步骤安装。"
                 : "已检测到设备上的 ACC " + installedVersion + "。可以直接使用现有模块和配置。";
         String text = status + "\n\nMagisk 初次安装\n"
@@ -35,7 +36,7 @@ final class AccModule {
                 + "内置版本 v2023.10.16（202310160）\n"
                 + "Copyright 2017–2023, VR25 · GPL-3.0-or-later\n"
                 + "许可证、可读源脚本与构建脚本均随 ZIP 分发。";
-        new CareDialog(activity).setTitle("内置 ACC 模块")
+        return new CareDialog(activity).setTitle("内置 ACC 模块")
                 .setMessage(text).setPositiveButton("导出模块 ZIP", (d, w) -> {
                     Intent create = new Intent(Intent.ACTION_CREATE_DOCUMENT)
                             .addCategory(Intent.CATEGORY_OPENABLE)
@@ -51,7 +52,7 @@ final class AccModule {
                     } catch (ActivityNotFoundException e) {
                         new CareDialog(activity).setMessage(SOURCE).setPositiveButton("完成", null).show();
                     }
-                }).setNegativeButton("关闭", null).show();
+                }).setNegativeButton("关闭", null).create();
     }
 
     static void export(Context app, Uri destination) {

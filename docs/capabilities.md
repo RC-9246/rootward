@@ -25,6 +25,8 @@
 - 使用独立接收端在 Android 模拟器上验证状态共享权限、温控和手动例外。真实插座通断、厂商休眠策略、不同内核对原生阈值的解释需要对应设备验证。
 - 1.2 的充电插座联动已在模拟器上对接 HTTPS 测试服务，核对 75% 断电、62% 等待、50% 恢复，以及断网、授权失败、重定向、证书不受信任和回执丢失。物理开关的动作和手机的实际电流仍需对应插座和手机验证。
 
+更多机型、外设、折叠屏及 AlDente 逐项对照见[最新调研](capability-review.md)。
+
 ## 复核所用的对照
 
 AlDente 的巡航、补电、温控、计划、校准、休眠及 Mac 专用功能用来对照交互和策略；AccuBattery 的充放电状态和历史用于对照观测需求。原厂 Pixel 支持的自适应充电和固定上限说明了哪些动作应优先交给固件。ACC 的设备依赖和 Linux ABI 划定了通用控制边界。[AlDente 功能](https://apphousekitchen.com/aldente-overview/features/) · [AccuBattery](https://accubatteryapp.com/) · [Pixel 充电优化](https://support.google.com/pixelphone/answer/7106961?hl=en) · [ACC 上游](https://github.com/VR-25/acc/tree/v2023.10.16) · [Linux 电源驱动 ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-class-power)

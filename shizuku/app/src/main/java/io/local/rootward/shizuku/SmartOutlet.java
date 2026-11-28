@@ -41,6 +41,7 @@ final class SmartOutlet {
     }
 
     String current(SharedPreferences policy) {
+      if (request.equals("allow") && policy.getBoolean(Reading.HEALTH_HOLD, false)) return "pause";
       return SystemClock.elapsedRealtime() - at > 150000
               || (until > 0
                   && (System.currentTimeMillis() >= until
@@ -77,10 +78,11 @@ final class SmartOutlet {
   }
 
   private static String desired(Context c) {
-    if (!prefs(c).getBoolean("active", false) || !ObserverApp.prefs(c).getBoolean("watch", false))
-      return "stop";
+    SharedPreferences policy = ObserverApp.prefs(c);
+    if (!prefs(c).getBoolean("active", false) || !policy.getBoolean("watch", false))
+      return policy.getBoolean(Reading.HEALTH_HOLD, false) ? "stop_during_fault" : "stop";
     Sample s = latest;
-    return s == null ? "unknown" : s.current(ObserverApp.prefs(c));
+    return s == null ? "unknown" : s.current(policy);
   }
 
   static synchronized void stop(Context c, Runnable finished) {
@@ -128,7 +130,7 @@ final class SmartOutlet {
     if (attention
         && !p.getBoolean("needsAttention", false)
         && nm.areNotificationsEnabled()
-        && nm.getNotificationChannel(WatchService.ALERT) != null) {
+        && (android.os.Build.VERSION.SDK_INT < 26 || nm.getNotificationChannel(WatchService.ALERT) != null)) {
       PendingIntent open =
           PendingIntent.getActivity(
               c,
@@ -137,7 +139,7 @@ final class SmartOutlet {
               PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
       nm.notify(
           37,
-          new Notification.Builder(c, WatchService.ALERT)
+          WatchNotices.builder(c, WatchService.ALERT)
               .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
               .setContentTitle("请核对充电插座")
               .setContentText(message)
@@ -156,7 +158,7 @@ final class SmartOutlet {
   private static String sync(Context c) {
     SharedPreferences p = prefs(c);
     String own = p.getString("owner", "");
-    if (desired(c).equals("stop") && own.isEmpty()) return outcome(c, "插座联动已关闭。", false);
+    if (own.isEmpty() && !prefs(c).getBoolean("active", false)) return outcome(c, "插座联动已关闭。", false);
     try {
       HaSwitch api = api(p);
       HaSwitch.State s = api.read();
@@ -169,6 +171,8 @@ final class SmartOutlet {
       if (!s.known()) return outcome(c, "插座离线或状态未知，请核对供电。", true);
       if (step == OutletPolicy.Step.UNCERTAIN)
         return outcome(c, "上一次断电回执不完整。请核对插座，需要时手动恢复供电。", true);
+      if ("stop_during_fault".equals(request) && s.mode.equals("off") && !p.getString("owner", "").isEmpty())
+        return outcome(c, "系统曾报告电池异常，插座保持断电。请核对电池状态后按需手动恢复供电。", true);
       if (step == OutletPolicy.Step.NONE)
         return outcome(
             c,

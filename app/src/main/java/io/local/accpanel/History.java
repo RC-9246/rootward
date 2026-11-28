@@ -23,6 +23,9 @@ import java.util.Locale;
 
 /** In-memory foreground samples. No service or storage permissions are needed. */
 public final class History {
+    private static boolean finite(float value) {
+        return !Float.isNaN(value) && !Float.isInfinite(value);
+    }
     private static final long MINUTE = 60_000;
     private static final long WINDOW = 30 * MINUTE;
     private static final long MAX_GAP = 90_000;
@@ -63,18 +66,13 @@ public final class History {
         return new ArrayList<>(samples);
     }
 
-    public void show(Activity activity) {
+    AlertDialog dialog(Activity activity) {
         Panel panel = new Panel(activity);
         AlertDialog dialog = new CareDialog(activity)
                 .setTitle("电池趋势").setBody(panel).setPositiveButton("关闭", null).create();
-        dialog.setOnDismissListener(d -> {
-            synchronized (History.this) {
-                if (openPanel.get() == panel) openPanel.clear();
-            }
-        });
         synchronized (this) { openPanel = new WeakReference<>(panel); }
         panel.refresh();
-        dialog.show();
+        return dialog;
     }
 
     private static int dp(Context context, float n) {
@@ -139,8 +137,15 @@ public final class History {
             span = Math.min(WINDOW, Math.max(MINUTE, ((span + MINUTE - 1) / MINUTE) * MINUTE));
             for (int i = 0; i < plots.length; i++) {
                 float value = rows.isEmpty() ? Float.NaN : rows.get(rows.size() - 1).values[i];
-                readings[i].setText(Float.isFinite(value) ? number(value, i) + " " + UNITS[i] : "—");
+                readings[i].setText(finite(value) ? number(value, i) + " " + UNITS[i] : "—");
                 plots[i].update(rows, end - span, end);
+            }
+        }
+
+        @Override protected void onDetachedFromWindow() {
+            super.onDetachedFromWindow();
+            synchronized (History.this) {
+                if (openPanel.get() == this) openPanel.clear();
             }
         }
     }
@@ -172,7 +177,7 @@ public final class History {
             float min = Float.POSITIVE_INFINITY, max = Float.NEGATIVE_INFINITY;
             for (Sample row : rows) {
                 float value = row.values[metric];
-                if (!Float.isFinite(value)) continue;
+                if (!finite(value)) continue;
                 count++;
                 min = Math.min(min, value);
                 max = Math.max(max, value);
@@ -232,7 +237,7 @@ public final class History {
             paint.setStrokeWidth(dp(ctx, 2));
             for (Sample row : rows) {
                 float value = row.values[metric];
-                if (!Float.isFinite(value)) {
+                if (!finite(value)) {
                     prevTime = Long.MIN_VALUE;
                     continue;
                 }

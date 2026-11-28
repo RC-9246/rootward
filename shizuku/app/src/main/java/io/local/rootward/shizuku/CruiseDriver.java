@@ -41,7 +41,7 @@ final class CruiseDriver {
     args =
         new Shizuku.UserServiceArgs(new ComponentName(context, BatteryReader.class))
             .tag("rootward-cruise")
-            .version(4)
+            .version(5)
             .daemon(false)
             .processNameSuffix("battery_cruise");
     thread.start();
@@ -118,7 +118,7 @@ final class CruiseDriver {
           .getSystemService(NotificationManager.class)
           .notify(
               34,
-              new Notification.Builder(context, WatchService.ALERT)
+              WatchNotices.builder(context, WatchService.ALERT)
                   .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
                   .setContentTitle("归根硬件巡航需要检查")
                   .setContentText(message)
@@ -250,16 +250,18 @@ final class CruiseDriver {
             prefs.getInt("high", 75));
     boolean hot =
         HardwareCruise.hot(prefs.getBoolean("thermal", false), temp, prefs.getInt("heat", 40));
+    boolean fault = r == null ? prefs.getBoolean(Reading.HEALTH_HOLD, false) : r.healthHold(prefs);
     boolean scheduled = BoostWindow.permits(
         BoostPlan.stage(prefs, System.currentTimeMillis(), phase, level), level,
-        prefs.getInt("low", 50), prefs.getInt("high", 75), temp, hot);
+        prefs.getInt("low", 50), prefs.getInt("high", 75), temp, hot || fault);
     if (scheduled) phase = ChargePhase.FILL;
-    int operation = HardwareCruise.operation(active, observed, hold, phase, level, temp, hot);
+    int operation = HardwareCruise.operation(active, observed, hold, phase, level, temp, hot || fault);
     if (operation == HardwareCruise.NONE) {
       if (observed == ChargeBehaviour.INHIBITED && hold != Hold.OWNED)
         problem("检测到既有停充。归根保留原有设置；需要时请关闭巡航后手动恢复。");
       else if (observed == ChargeBehaviour.INHIBITED)
-        status(hot ? "归根已暂停充电，等待温度回落。" : "归根已暂停充电，等待恢复条件。");
+        status(fault ? "归根已暂停充电，等待系统报告电池健康正常。"
+            : hot ? "归根已暂停充电，等待温度回落。" : "归根已暂停充电，等待恢复条件。");
       else status(active ? "驱动处于系统自动充电模式，巡航正在监测。" : "硬件巡航已关闭。");
       return;
     }
@@ -276,7 +278,8 @@ final class CruiseDriver {
       if (!claim(Hold.UNCERTAIN, boot, driver)) return;
       int after = reader.chargeMode(driver, operation).getInt("mode", ChargeBehaviour.UNCONFIRMED);
       if (after == ChargeBehaviour.INHIBITED) {
-        if (claim(Hold.OWNED, boot, driver)) status(hot ? "驱动已确认因温度暂停充电。" : "驱动已确认巡航暂停充电。");
+        if (claim(Hold.OWNED, boot, driver)) status(fault ? "驱动已确认因系统电池健康异常暂停充电。"
+            : hot ? "驱动已确认因温度暂停充电。" : "驱动已确认巡航暂停充电。");
       } else if (after == ChargeBehaviour.UNCONFIRMED) {
         problem("暂停请求未获驱动确认。请检查驱动并按需手动恢复系统控制。");
       } else if (claim(Hold.NONE, boot, driver)) {

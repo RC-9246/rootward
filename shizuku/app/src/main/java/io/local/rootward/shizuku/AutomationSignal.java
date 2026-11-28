@@ -38,7 +38,8 @@ public final class AutomationSignal extends ContentProvider {
     s.time = System.currentTimeMillis();
     s.appointment = boost ? BoostPlan.start(p) : 0;
     s.phase = boost ? "filling" : phase == ChargePhase.WAIT ? "waiting" : phase == ChargePhase.MANUAL ? "manual" : "filling";
-    if ((!boost && phase == ChargePhase.WAIT) || p.getBoolean("thermal", false)) s.request = "pause";
+    if ((!boost && phase == ChargePhase.WAIT) || p.getBoolean("thermal", false)
+        || p.getBoolean(Reading.HEALTH_HOLD, false)) s.request = "pause";
     else if (level < 0 || level > 100 || temperature == Integer.MIN_VALUE) s.request = "unknown";
     else s.request = "allow";
     SmartOutlet.observe(c, s.request, s.appointment == 0 ? 0 : s.appointment + BoostWindow.HOUR);

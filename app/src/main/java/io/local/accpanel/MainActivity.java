@@ -2,6 +2,8 @@ package io.local.accpanel;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
+import android.app.DialogFragment;
 import android.app.TimePickerDialog;
 import android.content.Context;
 import android.content.Intent;
@@ -379,7 +381,31 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
             return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
         }
     }
-    @Override public void history() { history.show(this); }
+    @Override public void history() { openInfo(InfoDialog.TREND); }
+
+    private void openInfo(int page) {
+        if (getFragmentManager().findFragmentByTag("info") != null) return;
+        InfoDialog info = new InfoDialog();
+        Bundle args = new Bundle();
+        args.putInt("page", page);
+        if (page == InfoDialog.MODULE && state != null) args.putString("version", state.version);
+        info.setArguments(args);
+        info.show(getFragmentManager(), "info");
+    }
+
+    /** The platform restores the open sheet when the display, window or activity changes. */
+    public static final class InfoDialog extends DialogFragment {
+        private static final int TREND = 0, GUIDE = 1, MODULE = 2;
+
+        @Override public Dialog onCreateDialog(Bundle saved) {
+            MainActivity owner = (MainActivity) getActivity();
+            switch (getArguments().getInt("page")) {
+                case GUIDE: return owner.guideDialog();
+                case MODULE: return AccModule.dialog(owner, getArguments().getString("version"));
+                default: return owner.history.dialog(owner);
+            }
+        }
+    }
 
     private SharedPreferences original() { return getSharedPreferences("first_read", MODE_PRIVATE); }
 
@@ -449,7 +475,7 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
     }
 
     @Override public void bundledAcc() {
-        AccModule.show(this, state == null ? null : state.version);
+        openInfo(InfoDialog.MODULE);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -460,7 +486,9 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
         }
     }
 
-    @Override public void guide() {
+    @Override public void guide() { openInfo(InfoDialog.GUIDE); }
+
+    private AlertDialog guideDialog() {
         String text = "上限与自然回落\n恢复电量等于停充上限减去回落的百分点数。在「充电控制」打开「跨插拔保持停充」后，"
                 + "例如设为 50%–75%，ACC 充到 75% 停充，回落到 60% 时拔线再插仍须等到 50% 或以下，并满足温控才允许复充。"
                 + "从 50% 开始向上充电经过 60% 时则继续充。首次开启会重启 ACC 以载入插件。插件在后台保存本轮阶段；卸载归根前可先在充电控制里关闭。\n\n"
@@ -470,8 +498,11 @@ public final class MainActivity extends Activity implements BatteryView.Actions 
                 + "手机久置\n在约一半电量时关机，放在阴凉干燥处，定期查看余量。日常无需为养护刻意放到自动关机。";
         CareDialog b = new CareDialog(this).setTitle("养护指南").setMessage(text)
                 .setPositiveButton("完成", null);
-        if (original().contains("lower") && canWrite() && !busy) b.setNeutralButton("恢复初始值…", (d, w) -> restore());
-        b.show();
+        if (original().contains("lower")) b.setNeutralButton("恢复初始值…", (d, w) -> {
+            if (canWrite() && !busy) restore();
+            else Toast.makeText(this, "请先刷新并确认 ACC 可写。", Toast.LENGTH_SHORT).show();
+        });
+        return b.create();
     }
 
     private void restore() {

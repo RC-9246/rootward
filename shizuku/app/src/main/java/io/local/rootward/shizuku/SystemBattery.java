@@ -12,10 +12,19 @@ import java.util.Map;
 final class SystemBattery {
   static final class Ambiguous extends IOException {}
 
+  interface InodeReader {
+    String read(Path path) throws IOException;
+  }
+
+  static volatile InodeReader legacyInodeReader;
+
   // A recreated same-name driver may receive a different sysfs inode within a boot.
   static String identity(Path real) throws IOException {
+    InodeReader legacy = legacyInodeReader;
+    if (legacy != null) return real + "@" + legacy.read(real);
     Object key = Files.readAttributes(real, BasicFileAttributes.class).fileKey();
-    return key == null ? "" : real.toString() + "@" + key;
+    // The Nougat NIO backport supplies a numeric path hash even if the inode changes.
+    return key == null || key instanceof Number ? "" : real + "@" + key;
   }
 
   static Path select(Path supplies) throws IOException {
@@ -53,7 +62,11 @@ final class SystemBattery {
   }
 
   static String text(Path p) throws IOException {
-    byte[] buf = new byte[96];
+    return text(p, 96);
+  }
+
+  static String text(Path p, int limit) throws IOException {
+    byte[] buf = new byte[limit];
     int count = 0;
     try (InputStream in = Files.newInputStream(p)) {
       while (count < buf.length) {

@@ -5,6 +5,7 @@ import android.content.*;
 import android.os.*;
 
 public final class WatchService extends Service {
+  private static final int BATTERY_HEALTH_NOTICE = 38;
   static final String STATUS = "watch",
       ALERT = "limit",
       UPDATE = "io.local.rootward.shizuku.UPDATE";
@@ -41,11 +42,7 @@ public final class WatchService extends Service {
     running = true;
     archive = new Archive(this);
     cruise = new CruiseDriver(this);
-    NotificationManager nm = getSystemService(NotificationManager.class);
-    nm.createNotificationChannel(
-        new NotificationChannel(STATUS, "持续记录", NotificationManager.IMPORTANCE_LOW));
-    nm.createNotificationChannel(
-        new NotificationChannel(ALERT, "电量与温度提醒", NotificationManager.IMPORTANCE_DEFAULT));
+    WatchNotices.ensureChannels(getSystemService(NotificationManager.class));
   }
 
   private Notification notice(String channel, String title, String detail, boolean ongoing) {
@@ -56,7 +53,7 @@ public final class WatchService extends Service {
             new Intent(this, MainActivity.class),
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     Notification.Builder b =
-        new Notification.Builder(this, channel)
+        WatchNotices.builder(this, channel)
             .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
             .setContentTitle(title)
             .setContentText(detail)
@@ -106,25 +103,35 @@ public final class WatchService extends Service {
   }
 
   private void tick() {
+    SharedPreferences p = ObserverApp.prefs(this);
+    if (!p.getBoolean("watch", false)) return;
     Reading r = Reading.now(this);
     if (r == null) {
-      SmartOutlet.observe(this, "unknown", 0);
+      AutomationSignal.publish(this, p, p.getInt("phase", ChargePhase.FILL), -1,
+          p.getInt("low", 50), p.getInt("high", 75), Integer.MIN_VALUE, false);
       cruise.sample();
       return;
     }
-    SharedPreferences p = ObserverApp.prefs(this);
-    if (!p.getBoolean("watch", false)) return;
     int lo = p.getInt("low", 50), hi = p.getInt("high", 75), hot = p.getInt("heat", 40);
     int old = p.getInt("phase", 0), phase = ChargePhase.sample(old, r.level, lo, hi);
     boolean thermal = p.getBoolean("thermal", false);
     boolean hardware = p.getBoolean("cruise", false);
     boolean outlet = SmartOutlet.prefs(this).getBoolean("active", false);
     NotificationManager nm = getSystemService(NotificationManager.class);
+    boolean fault = r.healthHold(p);
+    if (fault != p.getBoolean(Reading.HEALTH_HOLD, false)) {
+      p.edit().putBoolean(Reading.HEALTH_HOLD, fault).apply();
+      if (fault) {
+        nm.notify(BATTERY_HEALTH_NOTICE, notice(ALERT, "电池健康异常 · " + r.healthLabel(),
+            "自动补电建议已暂停。请查看系统电池状态。", false));
+      } else nm.cancel(BATTERY_HEALTH_NOTICE);
+    }
     if (phase != old) {
       p.edit().putInt("phase", phase).apply();
       String msg;
       if (phase == ChargePhase.WAIT) msg = hardware ? "达到巡航上限，正在核对驱动停充。" : outlet ? "已到上限，正在核对充电插座。" : "达到提醒上限，可拔线或手动暂停充电。";
       else msg = hardware ? "达到恢复下限，正在核对温度及驱动状态。" : outlet ? "已到下限，正在核对温度和充电插座。" : "达到恢复下限，需要时可接电或手动恢复。";
+      if (fault && phase != ChargePhase.WAIT) msg = "已到恢复线，等待系统电池健康恢复正常。";
       nm.notify(32, notice(ALERT, r.level + "% · 电量提醒", msg, false));
     }
     if (!thermal && r.temp != Integer.MIN_VALUE && r.temp >= hot * 10) {
@@ -172,7 +179,8 @@ public final class WatchService extends Service {
     BoostWindow.Stage stage = BoostPlan.stage(p, r.time, phase, r.level);
     if (stage == BoostWindow.Stage.NONE) return false;
     boolean announced = p.getBoolean(BoostPlan.ANNOUNCED, false);
-    boolean allow = BoostWindow.permits(stage, r.level, lo, hi, r.temp, p.getBoolean("thermal", false));
+    boolean allow = BoostWindow.permits(stage, r.level, lo, hi, r.temp,
+        p.getBoolean("thermal", false) || r.healthHold(p));
     NotificationManager nm = getSystemService(NotificationManager.class);
     if (stage == BoostWindow.Stage.FINISHED) {
       BoostPlan.clear(p.edit()).apply();

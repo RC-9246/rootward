@@ -4,7 +4,6 @@ import android.content.Context;
 import android.os.Binder;
 import android.os.Process;
 import java.io.BufferedReader;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -24,6 +23,16 @@ public final class BatteryReader extends IBatteryReader.Stub {
   // Shizuku 13 supplies the context used by the UserService. Older versions can still report UIDs.
   public BatteryReader(Context context) {
     serviceContext = context;
+    if (android.os.Build.VERSION.SDK_INT < 26) {
+      SystemBattery.legacyInodeReader = path -> {
+        try {
+          android.system.StructStat stat = android.system.Os.stat(path.toString());
+          return "(dev=" + Long.toHexString(stat.st_dev) + ",ino=" + stat.st_ino + ")";
+        } catch (android.system.ErrnoException failure) {
+          throw new IOException(failure);
+        }
+      };
+    }
   }
 
   @Override
@@ -64,7 +73,8 @@ public final class BatteryReader extends IBatteryReader.Stub {
       if (e.getCause() instanceof AppBatteryUsage.Unavailable) return e.getCause().getMessage();
       return "无法读取系统电池统计。";
     } finally {
-      process.destroyForcibly();
+      if (android.os.Build.VERSION.SDK_INT >= 26) process.destroyForcibly();
+      else process.destroy();
       result.cancel(true);
     }
   }
@@ -112,16 +122,6 @@ public final class BatteryReader extends IBatteryReader.Stub {
     System.exit(0);
   }
 
-  private static String field(String path) {
-    try (BufferedReader in =
-        new BufferedReader(new FileReader("/sys/class/power_supply/" + path))) {
-      String s = in.readLine();
-      if (s != null && s.matches("[a-zA-Z0-9 ._+:/\\[\\]-]{1,140}")) return s;
-    } catch (IOException | SecurityException ignored) {
-    }
-    return "未上报或不可读";
-  }
-
   private static void appendBatteryService(StringBuilder report) {
     java.lang.Process process = null;
     try {
@@ -164,20 +164,7 @@ public final class BatteryReader extends IBatteryReader.Stub {
   public String readSnapshot() {
     if (Process.myUid() != 2000) throw new SecurityException("请以 ADB 模式启动 Shizuku");
     StringBuilder report = new StringBuilder("Shizuku · ADB shell (UID 2000)");
-    String[][] names = {
-      {"电池状态", "battery/status"},
-      {"驱动循环次数", "battery/cycle_count"},
-      {"满充容量（驱动原值，通常 µAh）", "battery/charge_full"},
-      {"设计容量（驱动原值，通常 µAh）", "battery/charge_full_design"},
-      {"USB 在线", "usb/online"},
-      {"USB 类型", "usb/usb_type"},
-      {"USB 驱动瞬时电流（µA）", "usb/current_now"},
-      {"USB 驱动瞬时电压（µV）", "usb/voltage_now"},
-      {"USB 电流上限（µA）", "usb/current_max"},
-      {"USB 电压上限（µV）", "usb/voltage_max"},
-      {"电池驱动温度（0.1°C）", "battery/temp"}
-    };
-    for (String[] n : names) report.append("\n").append(n[0]).append("  ").append(field(n[1]));
+    report.append(SupplyReport.read(java.nio.file.Paths.get("/sys/class/power_supply")));
     appendBatteryService(report);
     return report.toString();
   }

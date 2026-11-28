@@ -3,11 +3,13 @@ package io.local.rootward.shizuku;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.os.BatteryManager;
 import android.os.Build;
 import java.util.Locale;
 
 final class Reading {
+  static final String HEALTH_HOLD = "systemBatteryFault";
   final long time;
   final int level, temp, mv, plug, status, cycles, chargeUah, health;
   final Integer current;
@@ -34,7 +36,23 @@ final class Reading {
 
   static Reading now(Context c) {
     Intent i = c.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-    return i == null ? null : new Reading(c, i);
+    return i == null || !i.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true)
+        ? null : new Reading(c, i);
+  }
+
+  boolean healthHold(SharedPreferences prefs) {
+    switch (health) {
+      case BatteryManager.BATTERY_HEALTH_COLD:
+      case BatteryManager.BATTERY_HEALTH_OVERHEAT:
+      case BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE:
+      case BatteryManager.BATTERY_HEALTH_DEAD:
+      case BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE:
+        return true;
+      case BatteryManager.BATTERY_HEALTH_GOOD:
+        return false;
+      default:
+        return prefs.getBoolean(HEALTH_HOLD, false);
+    }
   }
 
   String temperature() {

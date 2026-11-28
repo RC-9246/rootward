@@ -3,7 +3,6 @@ package io.local.accpanel;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.Base64;
 
 /** Installs only the reviewed, bundled plugin on the matching ACC daemon. */
 final class StrictHold {
@@ -76,7 +75,7 @@ final class StrictHold {
             + "private_dir || fail '归根控制目录校验失败。'\n"
             + "for item in enabled holding resume-once loaded-pid loaded-v2-pid loaded-v3-pid; do if has \"$dir/$item\" && ! reg \"$dir/$item\"; then fail '状态文件归属异常。'; fi; done\n"
             + "if ! valid_plugin; then\n"
-            + "  printf %s \"$body64\" | base64 -d > \"$stage/plugin\" && chmod 600 \"$stage/plugin\" || fail '准备插件失败。'\n"
+            + "  printf %s \"$body\" > \"$stage/plugin\" && chmod 600 \"$stage/plugin\" || fail '准备插件失败。'\n"
             + "  [ \"$(sha256sum \"$stage/plugin\" | cut -d' ' -f1)\" = '" + DIGEST + "' ] && /system/bin/sh -n \"$stage/plugin\" || fail '插件校验失败。'\n"
             + "  if legacy_plugin; then\n"
             + "    cp -p \"$plugin\" \"$stage/previous\" && cmp -s \"$stage/previous\" \"$plugin\" && legacy_plugin && mv -f \"$stage/plugin\" \"$plugin\" || fail '升级旧版插件失败。'\n"
@@ -117,7 +116,7 @@ final class StrictHold {
         String precondition = requireHold
                 ? "private_dir && reg \"$dir/enabled\" && reg \"$dir/holding\" || fail '请先开启严格巡航并等待进入回落阶段。'\n"
                 : "";
-        return ENV + INSTALL + precondition + "body64='" + Base64.getEncoder().encodeToString(bytes) + "'\nseed=" + seed + "\n" + ENABLE;
+        return ENV + INSTALL + precondition + "body='" + body.replace("'", "'\\''") + "'\nseed=" + seed + "\n" + ENABLE;
     }
 
     /** The marker records the approved ceiling; ACC owns every charger transition. */

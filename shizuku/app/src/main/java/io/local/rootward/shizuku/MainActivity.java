@@ -8,6 +8,7 @@ import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.*;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
 import android.widget.*;
@@ -23,10 +24,11 @@ public final class MainActivity extends Activity {
   private int ink, surface;
   private SharedPreferences prefs;
   private TextView level, state, metrics, limits, summary, phase, shizStatus, hardwareStatus;
-  private Button watch, shizAction, pauseDriver, resumeDriver;
+  private Button watch, reminderSettings, shizAction, pauseDriver, resumeDriver;
   private Switch manual, cruise;
   private Button appointment;
   private TextView appointmentDetail;
+  private EditText[] thresholdDraft;
   private Graph graph;
   private Archive archive;
   private long lastChartRefresh = -60000;
@@ -73,7 +75,8 @@ public final class MainActivity extends Activity {
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
     lp.bottomMargin = px(12);
     root.addView(p, lp);
-    text(p, title, 18, color == GREEN ? Color.WHITE : ink, true);
+    TextView heading = text(p, title, 18, color == GREEN ? Color.WHITE : ink, true);
+    if (Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
     return p;
   }
 
@@ -128,7 +131,8 @@ public final class MainActivity extends Activity {
     }));
     appointmentDetail = text(control, "", 14, ink, false);
     watch = btn(control, "开始记录与提醒", v -> toggleWatch());
-    btn(control, "设置电量与温度阈值", v -> configure());
+    reminderSettings = btn(control, "打开提醒通知设置", v -> openReminderSettings());
+    btn(control, "设置电量与温度阈值", v -> configure(null));
     btn(control, "保存与切换养护方案", v -> CareProfiles.show(this, prefs, this::applyLimits));
     btn(control, "打开系统电池设置", v -> PowerCareDialog.settings(this, false));
     btn(control, "打开系统省电设置", v -> PowerCareDialog.settings(this, true));
@@ -205,6 +209,8 @@ public final class MainActivity extends Activity {
             });
     shell.open();
     render();
+    String[] restoredThresholds = b == null ? null : b.getStringArray("thresholdDraft");
+    if (restoredThresholds != null && restoredThresholds.length == 3) configure(restoredThresholds);
     if (b == null && "io.local.rootward.shizuku.OPEN_OUTLET".equals(getIntent().getAction()))
       OutletDialog.show(this, this::refreshWatch);
   }
@@ -221,6 +227,16 @@ public final class MainActivity extends Activity {
     h.post(refresh);
     if (shell != null) shell.refresh();
     prefs.registerOnSharedPreferenceChangeListener(driverUpdates);
+  }
+
+  @Override
+  protected void onSaveInstanceState(Bundle state) {
+    super.onSaveInstanceState(state);
+    if (thresholdDraft != null) {
+      String[] values = new String[thresholdDraft.length];
+      for (int i = 0; i < values.length; i++) values[i] = thresholdDraft[i].getText().toString();
+      state.putStringArray("thresholdDraft", values);
+    }
   }
 
   @Override
@@ -284,12 +300,22 @@ public final class MainActivity extends Activity {
               + "  ·  健康状态  "
               + r.healthLabel()
               + (r.cycles >= 0 ? "  ·  循环 " + r.cycles + " 次" : ""));
+    } else {
+      level.setText("—");
+      state.setText("等待系统电池读数");
+      metrics.setText("");
     }
     boolean on = prefs.getBoolean("watch", false);
     int p = prefs.getInt("phase", 0);
     watch.setText(on ? "停止记录与提醒" : "开始记录与提醒");
     limits.setText(lo + "% 恢复提醒  ·  " + hi + "% 上限提醒  ·  " + hot + "°C 高温提醒");
-    boolean alerts = getSystemService(NotificationManager.class).areNotificationsEnabled();
+    NotificationManager notifications = getSystemService(NotificationManager.class);
+    boolean appNotifications = notifications.areNotificationsEnabled();
+    NotificationChannel channel = Build.VERSION.SDK_INT >= 26
+        ? notifications.getNotificationChannel(WatchService.ALERT) : null;
+    boolean channelBlocked = Build.VERSION.SDK_INT >= 26 && channel != null && channel.getImportance() == NotificationManager.IMPORTANCE_NONE;
+    String blocked = !appNotifications ? "应用通知已关闭。" : channelBlocked ? "电量与温度提醒渠道已关闭。" : "";
+    reminderSettings.setVisibility(on && !blocked.isEmpty() ? View.VISIBLE : View.GONE);
     boolean hardware = prefs.getBoolean("cruise", false);
     boolean outlet = SmartOutlet.prefs(this).getBoolean("active", false);
     boolean sharing = !prefs.getString(AutomationSignal.RECIPIENT, "").isEmpty();
@@ -313,7 +339,9 @@ public final class MainActivity extends Activity {
                         : "正在等候到达 " + hi + "%。")
                 : "记录已暂停。")
             + " 插拔不重置阶段。" + controlHint
-            + (on && !alerts ? " 系统通知已关闭。" : ""));
+            + (on && !WatchService.running ? " 正在等待记录服务启动。" : "")
+            + (on && r != null && r.healthHold(prefs) ? " 系统电池保护生效，自动补电暂停。" : "")
+            + (on && !blocked.isEmpty() ? " " + blocked : ""));
     manual.setChecked(p == ChargePhase.MANUAL);
     manual.setEnabled(
         on
@@ -339,8 +367,7 @@ public final class MainActivity extends Activity {
           if (isDestroyed() || isFinishing() || chartUpper != hi || chartHeat != hot) return;
           summary.setText("近 24 小时已记录 " + UsageWindow.duration(report.covered)
               + "，高电量与高温重叠 " + UsageWindow.duration(report.overlap));
-          graph.data = points;
-          graph.invalidate();
+          graph.show(points);
         });
       });
     }
@@ -425,7 +452,7 @@ public final class MainActivity extends Activity {
   private void refreshWatch() {
     if (!prefs.getBoolean("watch", false)) return;
     try {
-      startForegroundService(new Intent(this, WatchService.class));
+      WatchNotices.start(this, new Intent(this, WatchService.class));
     } catch (RuntimeException e) {
       msg("系统未允许刷新记录服务");
     }
@@ -443,7 +470,7 @@ public final class MainActivity extends Activity {
                 ChargePhase.sample(prefs.getInt("phase", ChargePhase.FILL), live.level, lo, hi);
             boolean hot =
                 HardwareCruise.hot(
-                    prefs.getBoolean("thermal", false), live.temp, prefs.getInt("heat", 40));
+                    prefs.getBoolean("thermal", false), live.temp, prefs.getInt("heat", 40)) || live.healthHold(prefs);
             boolean planned =
                 BoostWindow.permits(
                     BoostPlan.stage(prefs, live.time, phase, live.level),
@@ -507,7 +534,9 @@ public final class MainActivity extends Activity {
     LinearLayout panel = box();
     panel.setPadding(px(20), 0, px(20), 0);
     text(panel, "指定一个接收应用后，它可在记录期间读取当前电量、阈值和充电建议，用于联动自己的智能插座。最终开关状态由接收应用和插座确认。", 15, ink, false);
+    TextView recipientLabel = text(panel, "接收应用的 Android 包名", 14, ink, false);
     EditText pkg = new EditText(this);
+    DisplayLayout.labelInput(recipientLabel, pkg);
     pkg.setSingleLine(true);
     pkg.setHint("Android 包名，例如 net.dinglisch.android.taskerm");
     pkg.setText(prefs.getString(AutomationSignal.RECIPIENT, ""));
@@ -544,11 +573,36 @@ public final class MainActivity extends Activity {
     render();
   }
 
+  private void openReminderSettings() {
+    NotificationManager manager = getSystemService(NotificationManager.class);
+    if (Build.VERSION.SDK_INT >= 26) {
+      if (manager.areNotificationsEnabled() && manager.getNotificationChannel(WatchService.ALERT) != null) {
+        Intent channel = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())
+            .putExtra(Settings.EXTRA_CHANNEL_ID, WatchService.ALERT);
+        if (openSettings(channel)) return;
+      }
+      if (openSettings(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+          .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()))) return;
+    }
+    if (!openSettings(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:" + getPackageName())))) msg("请在系统设置中打开归根的通知设置");
+  }
+
+  private boolean openSettings(Intent intent) {
+    try {
+      startActivity(intent);
+      return true;
+    } catch (ActivityNotFoundException | SecurityException unavailable) {
+      return false;
+    }
+  }
+
   private void toggleWatch() {
     if (prefs.getBoolean("watch", false)) {
       BoostPlan.clear(prefs.edit()).putBoolean("watch", false).putBoolean("cruise", false).apply();
       try {
-        startForegroundService(new Intent(this, WatchService.class).setAction("stop"));
+        WatchNotices.start(this, new Intent(this, WatchService.class).setAction("stop"));
       } catch (RuntimeException e) {
         msg("系统未允许停止服务，请检查上次驱动读数");
       }
@@ -574,12 +628,13 @@ public final class MainActivity extends Activity {
   }
 
   private void startWatch() {
+    boolean previouslyEnabled = prefs.getBoolean("watch", false);
     prefs.edit().putBoolean("watch", true).apply();
     try {
-      startForegroundService(new Intent(this, WatchService.class));
+      WatchNotices.start(this, new Intent(this, WatchService.class));
     } catch (RuntimeException e) {
-      prefs.edit().putBoolean("watch", false).apply();
-      msg("系统未允许启动持续记录");
+      if (!previouslyEnabled) prefs.edit().putBoolean("watch", false).apply();
+      msg(previouslyEnabled ? "系统暂时限制恢复记录，下次打开时会重试。" : "系统未允许启动持续记录");
     }
     render();
   }
@@ -603,12 +658,16 @@ public final class MainActivity extends Activity {
     render();
   }
 
-  private void configure() {
+  private void configure(String[] values) {
     LinearLayout panel = box();
     panel.setPadding(px(20), 0, px(20), 0);
     EditText l = input(panel, "恢复提醒电量（%）", prefs.getInt("low", 50)),
         u = input(panel, "上限提醒电量（%）", prefs.getInt("high", 75)),
         t = input(panel, "高温提醒（°C）", prefs.getInt("heat", 40));
+    thresholdDraft = new EditText[] {l, u, t};
+    if (values != null) {
+      for (int i = 0; i < thresholdDraft.length; i++) thresholdDraft[i].setText(values[i]);
+    }
     AlertDialog d =
         new AlertDialog.Builder(this)
             .setTitle("电量与温度阈值")
@@ -616,27 +675,38 @@ public final class MainActivity extends Activity {
             .setPositiveButton("保存", null)
             .setNegativeButton("取消", null)
             .create();
+    d.setOnDismissListener(dialog -> thresholdDraft = null);
     d.show();
     d.getButton(-1)
         .setOnClickListener(
             v -> {
-              try {
-                int lo = Integer.parseInt(l.getText().toString()),
-                    hi = Integer.parseInt(u.getText().toString()),
-                    hot = Integer.parseInt(t.getText().toString());
-                if (lo < 0 || hi > 100 || lo >= hi || hot < 20 || hot > 65)
-                  throw new NumberFormatException();
-                d.dismiss();
-                applyLimits(lo, hi, hot);
-              } catch (NumberFormatException ex) {
-                msg("电量范围为 0–100%，下限须小于上限。温度范围为 20–65°C。");
-              }
+              int lo = thresholdValue(l, 0, 99);
+              if (lo < 0) return;
+              int hi = thresholdValue(u, lo + 1, 100);
+              if (hi < 0) return;
+              int hot = thresholdValue(t, 20, 65);
+              if (hot < 0) return;
+              d.dismiss();
+              applyLimits(lo, hi, hot);
             });
   }
 
+  private int thresholdValue(EditText input, int min, int max) {
+    try {
+      int value = Integer.parseInt(input.getText().toString());
+      if (value >= min && value <= max) return value;
+    } catch (NumberFormatException ignored) {
+      // A partially entered value stays available for correction.
+    }
+    input.requestFocus();
+    input.setError("请输入 " + min + "–" + max + " 范围内的整数");
+    return -1;
+  }
+
   private EditText input(LinearLayout p, String label, int n) {
-    text(p, label, 14, ink, false);
+    TextView fieldLabel = text(p, label, 14, ink, false);
     EditText e = new EditText(this);
+    DisplayLayout.labelInput(fieldLabel, e);
     e.setSingleLine(true);
     e.setInputType(InputType.TYPE_CLASS_NUMBER);
     e.setText(String.valueOf(n));
@@ -671,7 +741,27 @@ public final class MainActivity extends Activity {
 
     Graph() {
       super(MainActivity.this);
-      setContentDescription("最近一小时电量趋势");
+      setContentDescription("最近一小时暂无电量采样");
+    }
+
+    void show(ArrayList<PointF> points) {
+      data = points;
+      int first = -1, last = -1, low = 100, high = 0, count = 0;
+      for (PointF point : points) {
+        if (point == null) continue;
+        int percent = Math.round(point.y * 100);
+        if (count == 0) first = percent;
+        last = percent;
+        low = Math.min(low, percent);
+        high = Math.max(high, percent);
+        count++;
+      }
+      String description = "最近一小时暂无电量采样";
+      if (count == 1) description = "最近一小时仅一次采样，电量 " + first + "%";
+      if (count > 1) description = "最近一小时的已记录电量，首次 " + first + "%，最近 " + last
+          + "%，最低 " + low + "%，最高 " + high + "%";
+      setContentDescription(description);
+      invalidate();
     }
 
     @Override

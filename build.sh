@@ -49,7 +49,7 @@ while IFS= read -r -d '' source_file; do sources+=("$source_file"); done \
     < <(find "$source_dir/java" "$stage/gen" -name '*.java' -print0)
 javac -encoding UTF-8 --release 8 -g:source,lines -cp "$android_jar" -d "$stage/classes" "${sources[@]}"
 jar cf "$stage/classes.jar" -C "$stage/classes" .
-"$tools_dir/d8" --min-api 26 --release --lib "$android_jar" --output "$stage/dex" "$stage/classes.jar"
+"$tools_dir/d8" --min-api 23 --release --lib "$android_jar" --output "$stage/dex" "$stage/classes.jar"
 (
     cd "$stage/dex"
     touch -t 200901010000.00 classes*.dex

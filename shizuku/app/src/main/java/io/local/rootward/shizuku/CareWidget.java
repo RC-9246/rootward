@@ -55,7 +55,8 @@ public final class CareWidget extends AppWidgetProvider {
       boolean hot =
           p.getBoolean("thermal", false)
               || (r != null && r.temp != Integer.MIN_VALUE && r.temp >= p.getInt("heat", 40) * 10);
-      if (hot) state = "高温保护";
+      if (r == null ? p.getBoolean(Reading.HEALTH_HOLD, false) : r.healthHold(p)) state = "系统电池保护";
+      else if (hot) state = "高温保护";
       else if (r == null || r.level < 0 || r.temp == Integer.MIN_VALUE) state = "等待有效读数";
       else if (BoostWindow.permits(
           BoostPlan.stage(p, r.time, phase, r.level), r.level, lo, hi, r.temp, false))
@@ -105,7 +106,6 @@ public final class CareWidget extends AppWidgetProvider {
     int width = options.getInt(widthKey, 0);
     int height = options.getInt(heightKey, 0);
     if (width <= 0 || height <= 0) return fontScale <= 1.1f;
-    if (width <= 0 || height <= 0) return true;
     return width >= 190 * fontScale && height >= 24 + 88 * fontScale;
   }
 

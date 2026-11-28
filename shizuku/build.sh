@@ -65,6 +65,24 @@ fi
 actual=$(openssl dgst -sha256 "$annotation" | awk '{print $NF}')
 [[ "$actual" == 97dc45afefe3a1e421da42b8b6e9f90491477c45fc6178203e3a5e8a05ee8553 ]] || { echo "Digest mismatch: AndroidX annotations" >&2; exit 1; }
 jars+=("$annotation")
+# D8 rewrites newer Java APIs; L8 builds the matching java.time and NIO implementations for Nougat.
+desugar_version=2.1.5
+while read -r name digest; do
+    package="$dependencies/$name-$desugar_version.jar"
+    if [[ ! -f "$package" ]]; then
+        url="https://dl.google.com/dl/android/maven2/com/android/tools/$name/$desugar_version/$name-$desugar_version.jar"
+        curl -fsSL --retry 3 "$url" -o "$stage/$name.jar"
+        actual=$(openssl dgst -sha256 "$stage/$name.jar" | awk '{print $NF}')
+        [[ "$actual" == "$digest" ]] || { echo "Digest mismatch: $name" >&2; exit 1; }
+        mv "$stage/$name.jar" "$package"
+    fi
+    actual=$(openssl dgst -sha256 "$package" | awk '{print $NF}')
+    [[ "$actual" == "$digest" ]] || { echo "Digest mismatch: $name" >&2; exit 1; }
+done < "$project_dir/desugar-dependencies.txt"
+desugar_lib="$dependencies/desugar_jdk_libs_nio-$desugar_version.jar"
+desugar_adapter="$dependencies/desugar_jdk_libs_configuration_nio-$desugar_version.jar"
+unzip -p "$desugar_adapter" META-INF/desugar/d8/desugar.json > "$stage/desugar.json"
+
 "$tools_dir/aidl" "-p$sdk_dir/platforms/android-37.2/framework.aidl" "-I$source_dir/aidl" "-o$stage/gen" "$source_dir/aidl/io/local/rootward/shizuku/IBatteryReader.aidl"
 classpath=$(IFS=:; echo "${jars[*]}")
 sources=()
@@ -72,11 +90,24 @@ while IFS= read -r -d '' source_file; do sources+=("$source_file"); done \
     < <(find "$source_dir/java" "$stage/gen" -name '*.java' -print0)
 javac -encoding UTF-8 --release 8 -g:source,lines -cp "$android_jar:$classpath" -d "$stage/classes" "${sources[@]}"
 jar cf "$stage/classes.jar" -C "$stage/classes" .
-"$tools_dir/d8" --min-api 26 --release --lib "$android_jar" --output "$stage/dex" "$stage/classes.jar" "${jars[@]}"
+"$tools_dir/d8" --min-api 24 --release --lib "$android_jar" --desugared-lib "$stage/desugar.json" \
+    --output "$stage/dex" "$stage/classes.jar" "${jars[@]}"
+mkdir "$stage/runtime-dex"
+java -cp "$tools_dir/lib/d8.jar" com.android.tools.r8.L8 --min-api 24 --release \
+    --lib "$android_jar" --desugared-lib "$stage/desugar.json" --output "$stage/runtime-dex" "$desugar_lib" "$desugar_adapter"
+# Append each runtime dex without replacing an application dex.
+app_dex=("$stage/dex"/classes*.dex)
+index=${#app_dex[@]}
+for runtime in "$stage/runtime-dex"/classes*.dex; do
+    index=$((index + 1))
+    mv "$runtime" "$stage/dex/classes$index.dex"
+done
+mkdir -p "$stage/dex/assets/desugar-licenses"
+cp "$project_dir/desugar-licenses/"*.txt "$stage/dex/assets/desugar-licenses/"
 (
     cd "$stage/dex"
-    touch -t 200901010000.00 classes*.dex
-    zip -Xq "$stage/resources.apk" classes*.dex
+    touch -t 200901010000.00 classes*.dex assets/desugar-licenses/*.txt
+    zip -Xq "$stage/resources.apk" classes*.dex assets/desugar-licenses/*.txt
 )
 "$tools_dir/zipalign" -f 4 "$stage/resources.apk" "$stage/aligned.apk"
 
@@ -111,5 +142,5 @@ fi
     --out "$stage/signed.apk" "$stage/aligned.apk"
 "$tools_dir/zipalign" -c 4 "$stage/signed.apk"
 "$tools_dir/apksigner" verify --verbose "$stage/signed.apk"
-mv -f "$stage/signed.apk" "$build_dir/Rootward-Shizuku-1.3.apk"
-echo "$build_dir/Rootward-Shizuku-1.3.apk"
+mv -f "$stage/signed.apk" "$build_dir/Rootward-Shizuku-1.4.apk"
+echo "$build_dir/Rootward-Shizuku-1.4.apk"

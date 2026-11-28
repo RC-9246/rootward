@@ -10,6 +10,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -260,7 +261,7 @@ public final class BatteryView {
 
     private void addElectrical(LinearLayout body) {
         LinearLayout panel = card(16);
-        panel.addView(label("供电流向", 19, ink, true));
+        panel.addView(heading("供电流向", 19));
         gap(panel, 8);
         flowText = label("方向未知", 16, accent, true);
         flowText.setPadding(dp(12), dp(9), dp(12), dp(9));
@@ -278,7 +279,7 @@ public final class BatteryView {
         LinearLayout explanation = card(16);
         LinearLayout heading = adaptiveRow(225);
         heading.setGravity(Gravity.CENTER_VERTICAL);
-        heading.addView(label("当前充电策略", 19, ink, true), weight());
+        heading.addView(heading("当前充电策略", 19), weight());
         Button editPolicy = actionButton("调整策略", washed, accent);
         editPolicy.setOnClickListener(v -> openChargeControls());
         heading.addView(editPolicy);
@@ -298,6 +299,7 @@ public final class BatteryView {
 
     private TextView metric(LinearLayout metrics, String name) {
         LinearLayout cell = column();
+        if (Build.VERSION.SDK_INT >= 28) cell.setScreenReaderFocusable(true);
         cell.setGravity(Gravity.CENTER);
         cell.addView(label(name, 12, quiet, false));
         gap(cell, 4);
@@ -318,7 +320,7 @@ public final class BatteryView {
 
     private void addControls(LinearLayout body) {
         LinearLayout panel = card(16);
-        panel.addView(label("充电上限与回落", 21, ink, true));
+        panel.addView(heading("充电上限与回落", 21));
         gap(panel, 5);
         driver = label("—", 13, quiet, false);
         configured = label("—", 14, ink, false);
@@ -341,7 +343,7 @@ public final class BatteryView {
         gap(panel, 12);
         chargeEditor = new PairEditor(panel, false);
         gap(panel, 16);
-        panel.addView(label("跨插拔保持停充", 18, ink, true), block());
+        panel.addView(heading("跨插拔保持停充", 18), block());
         gap(panel, 4);
         cableHoldState = label("等待读取 ACC 配置。", 14, quiet, false);
         panel.addView(cableHoldState, block());
@@ -373,7 +375,7 @@ public final class BatteryView {
 
         gap(body, 12);
         LinearLayout thermal = card(16);
-        thermal.addView(label("温度保护", 21, ink, true));
+        thermal.addView(heading("温度保护", 21));
         gap(thermal, 5);
         thermalState = label("电池温度待获取", 14, accent, true);
         thermalState.setPadding(dp(11), dp(8), dp(11), dp(8));
@@ -398,7 +400,7 @@ public final class BatteryView {
                 bundle.putIntArray(key, new int[]{savedLower, savedUpper, lower, upper});
         }
         private final TextView lowValue, highValue, summary;
-        private final SeekBar lowBar, highBar;
+        private final ThresholdSlider lowBar, highBar;
         private final Button commit, preset;
 
         PairEditor(LinearLayout panel, boolean thermal) {
@@ -444,13 +446,13 @@ public final class BatteryView {
             return number;
         }
 
-        private SeekBar bar(LinearLayout panel, boolean isLower) {
-            SeekBar bar = new SeekBar(activity);
-            bar.setMax(thermal ? (isLower ? 49 : 50) : (isLower ? 95 : 100));
-            bar.setMin(thermal ? (isLower ? 20 : 35) : (isLower ? 1 : 6));
+        private ThresholdSlider bar(LinearLayout panel, boolean isLower) {
+            String label = thermal ? (isLower ? "恢复温度" : "暂停温度")
+                    : (isLower ? "自然回落幅度" : "停止充电上限");
+            ThresholdSlider bar = new ThresholdSlider(activity, isLower ? 1 : (thermal ? 35 : 6),
+                    thermal ? (isLower ? 49 : 50) : (isLower ? 95 : 100), label,
+                    thermal ? "°C" : (isLower ? " 个百分点" : "%"));
             bar.setPadding(dp(10), 0, dp(10), 0);
-            bar.setContentDescription(thermal ? (isLower ? "恢复温度" : "暂停温度")
-                    : (isLower ? "自然回落幅度，百分点" : "停止充电上限，百分比"));
             bar.setProgressTintList(ColorStateList.valueOf(accent));
             bar.setProgressBackgroundTintList(ColorStateList.valueOf(line));
             bar.setThumbTintList(ColorStateList.valueOf(accent));
@@ -459,11 +461,12 @@ public final class BatteryView {
                 @Override public void onStopTrackingTouch(SeekBar s) {}
                 @Override public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
                     if (!fromUser) return;
+                    int value = bar.value();
                     if (isLower) {
-                        lower = thermal ? progress : upper - progress;
+                        lower = thermal ? value : upper - value;
                     } else {
                         int previousDifference = upper - lower;
-                        upper = progress;
+                        upper = value;
                         if (!thermal) lower = Math.max(5, upper - previousDifference);
                     }
                     setDraft(lower, upper);
@@ -474,8 +477,6 @@ public final class BatteryView {
         }
 
         void setSaved(int lower, int upper) {
-            if (lower >= upper || lower < (thermal ? 20 : 5) || upper < highBar.getMin()
-                    || upper > highBar.getMax()) return;
             savedLower = lower;
             savedUpper = upper;
             if (pendingDraft != null && pendingDraft.length == 4
@@ -488,9 +489,11 @@ public final class BatteryView {
         private void setDraft(int lower, int upper) {
             this.lower = lower;
             this.upper = upper;
-            if (!thermal) lowBar.setMax(upper - 5);
-            lowBar.setProgress(thermal ? lower : upper - lower);
-            highBar.setProgress(upper);
+            if (fitsSliders()) {
+                if (!thermal) lowBar.setUpperBound(upper - 5);
+                lowBar.setValue(thermal ? lower : upper - lower);
+                highBar.setValue(upper);
+            }
             update();
         }
 
@@ -515,7 +518,11 @@ public final class BatteryView {
             }
         }
 
-        private boolean validDraft() { return lower < upper; }
+        private boolean fitsSliders() {
+            return thermal ? lower >= 1 && lower <= 49 && upper >= 35 && upper <= 50
+                    : lower >= 5 && lower < upper && upper <= 100;
+        }
+        private boolean validDraft() { return fitsSliders() && lower < upper; }
         private boolean hasChanges() {
             return savedLower == null || savedUpper == null || savedLower != lower || savedUpper != upper;
         }
@@ -529,8 +536,9 @@ public final class BatteryView {
             if (thermal) updateThermalState(showDraft);
             else summary.setText(showDraft ? "恢复电量设为 " + lower + "%。" : "恢复电量待 ACC 回读。");
             highValue.setText(showDraft ? upper + unit : "—");
-            lowBar.setVisibility(showDraft ? View.VISIBLE : View.INVISIBLE);
-            highBar.setVisibility(showDraft ? View.VISIBLE : View.INVISIBLE);
+            boolean slidersVisible = showDraft && fitsSliders();
+            lowBar.setVisibility(slidersVisible ? View.VISIBLE : View.INVISIBLE);
+            highBar.setVisibility(slidersVisible ? View.VISIBLE : View.INVISIBLE);
             commit.setEnabled(active);
             commit.setAlpha(active ? 1f : 0.65f);
             preset.setEnabled(editing);
@@ -540,6 +548,7 @@ public final class BatteryView {
             String title = thermal ? "应用温控" : "应用区间";
             if (working) title = "处理中";
             else if (!writable) title = "仅可查看";
+            else if (!fitsSliders()) title = "超出可编辑范围";
             else if (!validDraft()) title = "下限须小于上限";
             else if (!hasChanges()) title = "已应用";
             commit.setText(title);
@@ -753,6 +762,12 @@ public final class BatteryView {
         button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33888888),
                 shape(fill, 12, 0), null));
         return button;
+    }
+
+    private TextView heading(String title, int size) {
+        TextView heading = label(title, size, ink, true);
+        if (Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
+        return heading;
     }
 
     private TextView label(String text, int size, int color, boolean medium) {

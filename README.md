@@ -1,5 +1,16 @@
 # 归根 · 签名安装包
 
+## ACC 1.7 和无 root 1.4
+
+两个版本使用 Android 17.2 SDK，沿用原包名和签名，可覆盖升级。
+
+| 版本 | 最低系统 | 安装包 | 对应源码 |
+| --- | --- | --- | --- |
+| ACC 1.7 | Android 6.0 | [APK](https://raw.githubusercontent.com/RC-9246/rootward/downloads/v1.7/Rootward-1.7.apk) | [ZIP](https://raw.githubusercontent.com/RC-9246/rootward/downloads/v1.7/Rootward-1.7-source.zip) |
+| Shizuku 1.4（无 root） | Android 7.0 | [APK](https://raw.githubusercontent.com/RC-9246/rootward/downloads/v1.7/Rootward-Shizuku-1.4.apk) | [ZIP](https://raw.githubusercontent.com/RC-9246/rootward/downloads/v1.7/Rootward-Shizuku-1.4-source.zip) |
+
+[SHA-256 校验值](v1.7/SHA256SUMS) · [兼容性实测](https://github.com/RC-9246/rootward/blob/f8954ef3f60d6b598a04e5ec1257c52cd244be2c/docs/android-compatibility.md) · [竞品与原厂功能对照](https://github.com/RC-9246/rootward/blob/f8954ef3f60d6b598a04e5ec1257c52cd244be2c/docs/capability-review.md)
+
 ## ACC 1.6 和无 root 1.3
 
 两版均支持从上一版覆盖更新，最低 Android 8.0，目标 Android 17。已在 Android 17.2 的 16 KB 页模拟器上验证界面、升级和权限流程。
